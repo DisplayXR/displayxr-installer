@@ -45,7 +45,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install NSIS
-        run: choco install nsis -y --no-progress
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          # choco installs makensis to C:\Program Files (x86)\NSIS\ but
+          # does not update PATH for subsequent steps. Append explicitly.
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Build Windows bundle (validation only)
         env:
