@@ -1,0 +1,61 @@
+name: Build bundle
+
+# Per-PR validation — assembles the bundle on both platforms but does
+# NOT upload to a release. Catches breakage in the build scripts /
+# child-installer downloads early. The real release flow is
+# publish-bundle.yml (workflow_dispatch only).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: brew install jq
+
+      - name: Build macOS bundle (validation only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/build-bundle.sh --version "v0.0.0-ci.${{ github.run_number }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DisplayXRBundle-macOS-ci
+          path: _out/DisplayXRBundle-*.pkg
+          retention-days: 3
+          if-no-files-found: error
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
+      - name: Build Windows bundle (validation only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: cmd
+        run: scripts\build-bundle.bat --version "v0.0.0-ci.${{ github.run_number }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DisplayXRBundle-Windows-ci
+          path: _out\DisplayXRBundle-*.exe
+          retention-days: 3
+          if-no-files-found: error
