@@ -1,0 +1,21 @@
+# Build / staging output
+_stage/
+_out/
+*.pkg
+*.exe
+!installer/windows/*.exe.placeholder
+
+# Local credentials
+.secrets/
+.env
+.env.local
+
+# OS / editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Downloaded child-installer copies
+scripts/lib/.cached-components.sh
