@@ -50,9 +50,12 @@ if "%BUNDLE_VERSION%"=="" (
 :: Strip leading 'v' from the version string for NSIS PRODUCT_VERSION.
 if /i "%BUNDLE_VERSION:~0,1%"=="v" set "BUNDLE_VERSION=%BUNDLE_VERSION:~1%"
 
-set "REPO_ROOT=%~dp0.."
-:: Normalize trailing slashes.
-for %%F in ("%REPO_ROOT%") do set "REPO_ROOT=%%~fF"
+:: Canonicalize via pushd/popd. %CD% is always absolute with no trailing
+:: slash and no '..' segments — the for/%%~fF normalization trick fails
+:: on the GitHub Actions Windows runner.
+pushd "%~dp0.."
+set "REPO_ROOT=%CD%"
+popd
 set "VERSIONS_JSON=%REPO_ROOT%\versions.json"
 set "STAGE=%REPO_ROOT%\_stage"
 set "OUT_DIR=%REPO_ROOT%\_out"
