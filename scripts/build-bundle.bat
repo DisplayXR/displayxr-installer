@@ -50,29 +50,26 @@ if "%BUNDLE_VERSION%"=="" (
 :: Strip leading 'v' from the version string for NSIS PRODUCT_VERSION.
 if /i "%BUNDLE_VERSION:~0,1%"=="v" set "BUNDLE_VERSION=%BUNDLE_VERSION:~1%"
 
-:: DEBUG: dump the relevant context so we can see what the runner is
-:: actually doing.
-echo DEBUG: script_dp0=[%~dp0]
-echo DEBUG: cwd_at_start=[%CD%]
-echo DEBUG: github_workspace=[%GITHUB_WORKSPACE%]
-
-:: Canonicalize via pushd/popd. %CD% is always absolute with no trailing
-:: slash and no '..' segments.
-pushd "%~dp0.."
-echo DEBUG: post_pushd_cd=[%CD%]
-set "REPO_ROOT=%CD%"
-popd
-echo DEBUG: REPO_ROOT=[%REPO_ROOT%]
+:: Determine REPO_ROOT. cmd's %~dp0 is unreliable under
+::   cmd /S /C "CALL <temp.cmd>"
+:: (the GitHub Actions `shell: cmd` invocation pattern): it returns the
+:: caller's CWD instead of the script's own directory. Two sources we
+:: can trust:
+::   - GITHUB_WORKSPACE is always set on GitHub Actions runners.
+::   - %CD% is the repo root for local-dev invocations from the repo
+::     root (the documented usage).
+:: Using `if defined ... set` (no parenthesized block) avoids the
+:: delayed-expansion pitfall with %VAR% inside parens.
+set "REPO_ROOT="
+if defined GITHUB_WORKSPACE set "REPO_ROOT=%GITHUB_WORKSPACE%"
+if "%REPO_ROOT%"=="" set "REPO_ROOT=%CD%"
 set "VERSIONS_JSON=%REPO_ROOT%\versions.json"
 set "STAGE=%REPO_ROOT%\_stage"
 set "OUT_DIR=%REPO_ROOT%\_out"
 
-echo DEBUG: VERSIONS_JSON=[%VERSIONS_JSON%]
-echo DEBUG: listing dir contents of REPO_ROOT:
-dir "%REPO_ROOT%" 2>&1 | findstr /v "Directory of"
-
 if not exist "%VERSIONS_JSON%" (
     echo ERROR: versions.json not found at %VERSIONS_JSON%
+    echo        Run scripts\build-bundle.bat from the repo root.
     exit /b 1
 )
 
