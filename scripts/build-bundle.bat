@@ -50,15 +50,26 @@ if "%BUNDLE_VERSION%"=="" (
 :: Strip leading 'v' from the version string for NSIS PRODUCT_VERSION.
 if /i "%BUNDLE_VERSION:~0,1%"=="v" set "BUNDLE_VERSION=%BUNDLE_VERSION:~1%"
 
+:: DEBUG: dump the relevant context so we can see what the runner is
+:: actually doing.
+echo DEBUG: script_dp0=[%~dp0]
+echo DEBUG: cwd_at_start=[%CD%]
+echo DEBUG: github_workspace=[%GITHUB_WORKSPACE%]
+
 :: Canonicalize via pushd/popd. %CD% is always absolute with no trailing
-:: slash and no '..' segments — the for/%%~fF normalization trick fails
-:: on the GitHub Actions Windows runner.
+:: slash and no '..' segments.
 pushd "%~dp0.."
+echo DEBUG: post_pushd_cd=[%CD%]
 set "REPO_ROOT=%CD%"
 popd
+echo DEBUG: REPO_ROOT=[%REPO_ROOT%]
 set "VERSIONS_JSON=%REPO_ROOT%\versions.json"
 set "STAGE=%REPO_ROOT%\_stage"
 set "OUT_DIR=%REPO_ROOT%\_out"
+
+echo DEBUG: VERSIONS_JSON=[%VERSIONS_JSON%]
+echo DEBUG: listing dir contents of REPO_ROOT:
+dir "%REPO_ROOT%" 2>&1 | findstr /v "Directory of"
 
 if not exist "%VERSIONS_JSON%" (
     echo ERROR: versions.json not found at %VERSIONS_JSON%
