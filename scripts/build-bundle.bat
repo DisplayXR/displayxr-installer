@@ -93,6 +93,9 @@ set "COMPONENT_EXE_leia_plugin=DisplayXRLeiaSRSetup-*.exe"
 set "COMPONENT_REPO_mcp_tools=DisplayXR/displayxr-mcp"
 set "COMPONENT_EXE_mcp_tools=DisplayXRMCPSetup-*.exe"
 
+set "COMPONENT_REPO_gauss_demo=DisplayXR/displayxr-demo-gaussiansplat"
+set "COMPONENT_EXE_gauss_demo=DisplayXRGaussianSplatSetup-*.exe"
+
 :: --- Read pins from versions.json ---
 :: Per PR DisplayXR/displayxr-runtime#291 fix #1: use function-call form
 :: for ConvertFrom-Json, NOT a pipe inside `for /f`. cmd's re-quoting of
@@ -102,11 +105,13 @@ call :read_pin runtime     RUNTIME_TAG
 call :read_pin shell       SHELL_TAG
 call :read_pin leia_plugin LEIA_TAG
 call :read_pin mcp_tools   MCP_TAG
+call :read_pin gauss_demo  GAUSS_TAG
 
 if "%RUNTIME_TAG%"=="" ( echo ERROR: versions.json missing 'runtime' pin & exit /b 1 )
 if "%SHELL_TAG%"==""   ( echo ERROR: versions.json missing 'shell' pin & exit /b 1 )
 if "%LEIA_TAG%"==""    ( echo ERROR: versions.json missing 'leia_plugin' pin & exit /b 1 )
 if "%MCP_TAG%"==""     ( echo ERROR: versions.json missing 'mcp_tools' pin & exit /b 1 )
+if "%GAUSS_TAG%"==""   ( echo ERROR: versions.json missing 'gauss_demo' pin & exit /b 1 )
 
 echo ==^> DisplayXR bundle build
 echo     bundle:      v%BUNDLE_VERSION%
@@ -114,26 +119,30 @@ echo     runtime:     %RUNTIME_TAG%
 echo     shell:       %SHELL_TAG%
 echo     leia_plugin: %LEIA_TAG%
 echo     mcp_tools:   %MCP_TAG%
+echo     gauss_demo:  %GAUSS_TAG%
 
 :: --- Download each component's installer into _stage\<name>\ ---
 call :download_component runtime     %RUNTIME_TAG% || exit /b 1
 call :download_component shell       %SHELL_TAG%   || exit /b 1
 call :download_component leia_plugin %LEIA_TAG%    || exit /b 1
-call :download_component mcp_tools   %MCP_TAG%    || exit /b 1
+call :download_component mcp_tools   %MCP_TAG%     || exit /b 1
+call :download_component gauss_demo  %GAUSS_TAG%   || exit /b 1
 
 :: --- Capture the actual downloaded filenames (globs may match different builds) ---
 call :find_exe runtime     RUNTIME_EXE_FILE || exit /b 1
 call :find_exe shell       SHELL_EXE_FILE   || exit /b 1
 call :find_exe leia_plugin LEIA_EXE_FILE    || exit /b 1
-call :find_exe mcp_tools   MCP_EXE_FILE    || exit /b 1
+call :find_exe mcp_tools   MCP_EXE_FILE     || exit /b 1
+call :find_exe gauss_demo  GAUSS_EXE_FILE   || exit /b 1
 
-:: Copy all four .exe files into _stage\bundle\ where NSIS expects them.
+:: Copy all .exe files into _stage\bundle\ where NSIS expects them.
 set "BUNDLE_STAGE=%STAGE%\bundle"
 mkdir "%BUNDLE_STAGE%" 2>nul
 copy /Y "%STAGE%\runtime\%RUNTIME_EXE_FILE%"        "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\shell\%SHELL_EXE_FILE%"            "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\leia_plugin\%LEIA_EXE_FILE%"       "%BUNDLE_STAGE%\" >nul || exit /b 1
-copy /Y "%STAGE%\mcp_tools\%MCP_EXE_FILE%"         "%BUNDLE_STAGE%\" >nul || exit /b 1
+copy /Y "%STAGE%\mcp_tools\%MCP_EXE_FILE%"          "%BUNDLE_STAGE%\" >nul || exit /b 1
+copy /Y "%STAGE%\gauss_demo\%GAUSS_EXE_FILE%"       "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%REPO_ROOT%\LICENSE"                       "%BUNDLE_STAGE%\" >nul || exit /b 1
 
 :: --- Invoke makensis ---
@@ -149,6 +158,7 @@ makensis ^
     "/DSHELL_EXE=%SHELL_EXE_FILE%" ^
     "/DLEIA_EXE=%LEIA_EXE_FILE%" ^
     "/DMCP_EXE=%MCP_EXE_FILE%" ^
+    "/DGAUSS_EXE=%GAUSS_EXE_FILE%" ^
     "/DBUNDLE_STAGE=%BUNDLE_STAGE%" ^
     "/DOUTPUT_DIR=%OUT_DIR%" ^
     "%REPO_ROOT%\installer\windows\DisplayXRBundleInstaller.nsi"
