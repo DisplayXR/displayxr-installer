@@ -61,6 +61,26 @@ ShowUninstDetails show
 !insertmacro MUI_LANGUAGE "English"
 
 ;--------------------------------
+; Init — run all HKLM access in the 64-bit view.
+;
+; NSIS bundles default to 32-bit, which silently redirects
+; HKLM\Software\... reads and writes through WOW6432Node. All four
+; child installers (runtime, shell, leia, mcp) write their state to
+; the real 64-bit view, so without SetRegView 64 our ARP entry lands
+; in WOW6432Node (where Add/Remove Programs doesn't show it) and the
+; uninstall section's ReadRegStr for each child returns empty —
+; silently skipping the whole chain.
+;--------------------------------
+
+Function .onInit
+    SetRegView 64
+FunctionEnd
+
+Function un.onInit
+    SetRegView 64
+FunctionEnd
+
+;--------------------------------
 ; Install
 ;--------------------------------
 
@@ -150,8 +170,12 @@ Section "Uninstall"
     Var /GLOBAL ChildUninstall
 
     ; -- MCP Tools --
+    ; ARP key names are the children's own ProductName slugs — no hyphens
+    ; between "DisplayXR" and the component (the child installers write
+    ; "DisplayXRMCP", "DisplayXRLeiaSR", "DisplayXRShell"). A hyphenated
+    ; lookup silently misses every child.
     ClearErrors
-    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXR-MCP" "UninstallString"
+    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMCP" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling DisplayXR MCP Tools..."
         ExecWait '$ChildUninstall /S' $0
@@ -159,7 +183,7 @@ Section "Uninstall"
 
     ; -- Leia SR Plug-in --
     ClearErrors
-    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXR-LeiaSR" "UninstallString"
+    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaSR" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling Leia SR Plug-in..."
         ExecWait '$ChildUninstall /S' $0
@@ -167,7 +191,7 @@ Section "Uninstall"
 
     ; -- Shell --
     ClearErrors
-    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXR-Shell" "UninstallString"
+    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRShell" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling DisplayXR Shell..."
         ExecWait '$ChildUninstall /S' $0
