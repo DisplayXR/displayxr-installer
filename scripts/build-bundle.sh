@@ -66,6 +66,7 @@ source "$REPO_ROOT/scripts/lib/fetch-components.sh"
 SHELL_TAG="$(jq -r '.shell' "$REPO_ROOT/versions.json")"
 LEIA_TAG="$(jq -r '.leia_plugin' "$REPO_ROOT/versions.json")"
 MCP_TAG="$(jq -r '.mcp_tools' "$REPO_ROOT/versions.json")"
+GAUSS_TAG="$(jq -r '.gauss_demo' "$REPO_ROOT/versions.json")"
 
 cat <<EOF
 ==> DisplayXR bundle build
@@ -74,6 +75,7 @@ cat <<EOF
     shell:       $SHELL_TAG
     leia_plugin: $LEIA_TAG
     mcp_tools:   $MCP_TAG
+    gauss_demo:  $GAUSS_TAG
 EOF
 
 # 2. Walk components; download any with a non-empty macOS asset glob and
@@ -124,6 +126,9 @@ process_component() {
         runtime)
             extract_runtime "$expanded"
             ;;
+        gauss_demo)
+            extract_gauss_demo "$expanded"
+            ;;
         shell|leia_plugin|mcp_tools)
             # Future: shell/leia/mcp don't ship macOS .pkg today. When
             # they do, add extract_$name like extract_runtime — most
@@ -156,10 +161,42 @@ extract_runtime() {
 "
 }
 
+# extract_gauss_demo: same shape as extract_runtime. The demo .pkg is a
+# productbuild distribution with one component named gaussiansplat.pkg
+# inside (identifier com.displayxr.gaussiansplat). The choice is
+# user-toggleable (no enabled="false") because demos are opt-in unlike
+# the runtime which is mandatory.
+extract_gauss_demo() {
+    local expanded="$1"
+    local comp_dir="$expanded/gaussiansplat.pkg"
+    if [[ ! -d "$comp_dir" ]]; then
+        echo "ERROR: gaussiansplat.pkg not found inside expanded gauss_demo distribution" >&2
+        echo "       (expected $comp_dir; check that the demo release artifact is a productbuild distribution)" >&2
+        exit 1
+    fi
+    local flat="$COMPONENTS_DIR/gauss_demo.pkg"
+    pkgutil --flatten "$comp_dir" "$flat"
+
+    CHOICE_LINES+="        <line choice=\"gauss_demo\"/>"$'\n'
+    CHOICES+="    <choice id=\"gauss_demo\" visible=\"true\" start_selected=\"true\"
+        title=\"Gaussian Splat Viewer\"
+        description=\"DisplayXR demo: real-time 3D Gaussian Splatting viewer for glasses-free 3D displays. Installs to /Applications/Gaussian Splat Viewer.app. Optional.\">
+        <pkg-ref id=\"com.displayxr.gaussiansplat\"/>
+    </choice>
+"
+    PKG_REFS+="    <pkg-ref id=\"com.displayxr.gaussiansplat\" version=\"${GAUSS_TAG#v}\" onConclusion=\"none\">gauss_demo.pkg</pkg-ref>
+"
+}
+
 process_component runtime     "$RUNTIME_TAG"
 process_component shell       "$SHELL_TAG"
 process_component leia_plugin "$LEIA_TAG"
 process_component mcp_tools   "$MCP_TAG"
+# Demos go after core components in the install UI. gauss_demo is the
+# only one with a macOS .pkg today (displayxr-demo-gaussiansplat v1.4.0).
+# Activation also requires runtime's components.sh to carry a gauss_demo
+# entry — graceful skip otherwise.
+process_component gauss_demo  "$GAUSS_TAG"
 
 if [[ -z "$CHOICE_LINES" ]]; then
     echo "ERROR: no components produced a macOS .pkg — nothing to bundle" >&2
