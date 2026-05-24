@@ -139,14 +139,18 @@ copy /Y "%REPO_ROOT%\LICENSE"                       "%BUNDLE_STAGE%\" >nul || ex
 :: --- Invoke makensis ---
 echo ==^> makensis -^> %OUT_DIR%\DisplayXRBundle-%BUNDLE_VERSION%.exe
 
+:: Quote every /D value so makensis doesn't tokenize on whitespace when
+:: BUNDLE_STAGE / OUT_DIR contains a space (e.g. dev machines under
+:: C:\Users\<name with space>\...). CI's GITHUB_WORKSPACE is space-free
+:: so this only surfaces on local runs.
 makensis ^
-    /DBUNDLE_VERSION=%BUNDLE_VERSION% ^
-    /DRUNTIME_EXE=%RUNTIME_EXE_FILE% ^
-    /DSHELL_EXE=%SHELL_EXE_FILE% ^
-    /DLEIA_EXE=%LEIA_EXE_FILE% ^
-    /DMCP_EXE=%MCP_EXE_FILE% ^
-    /DBUNDLE_STAGE=%BUNDLE_STAGE% ^
-    /DOUTPUT_DIR=%OUT_DIR% ^
+    "/DBUNDLE_VERSION=%BUNDLE_VERSION%" ^
+    "/DRUNTIME_EXE=%RUNTIME_EXE_FILE%" ^
+    "/DSHELL_EXE=%SHELL_EXE_FILE%" ^
+    "/DLEIA_EXE=%LEIA_EXE_FILE%" ^
+    "/DMCP_EXE=%MCP_EXE_FILE%" ^
+    "/DBUNDLE_STAGE=%BUNDLE_STAGE%" ^
+    "/DOUTPUT_DIR=%OUT_DIR%" ^
     "%REPO_ROOT%\installer\windows\DisplayXRBundleInstaller.nsi"
 if errorlevel 1 (
     echo ERROR: makensis failed
