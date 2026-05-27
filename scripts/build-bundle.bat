@@ -113,6 +113,22 @@ if "%LEIA_TAG%"==""    ( echo ERROR: versions.json missing 'leia_plugin' pin & e
 if "%MCP_TAG%"==""     ( echo ERROR: versions.json missing 'mcp_tools' pin & exit /b 1 )
 if "%GAUSS_TAG%"==""   ( echo ERROR: versions.json missing 'gauss_demo' pin & exit /b 1 )
 
+:: --- Bare versions for the NSI version-compare gate (#346) ---
+:: Strip the leading 'v' from each pin so it matches the 3-part DisplayVersion
+:: each component writes to its ARP key (e.g. v1.5.3 -> 1.5.3). The bundle NSI
+:: feeds these to ${VersionCompare} so an in-place update only re-runs a
+:: sub-installer when the pinned version is strictly newer than installed.
+set "RUNTIME_VER=%RUNTIME_TAG%"
+set "SHELL_VER=%SHELL_TAG%"
+set "LEIA_VER=%LEIA_TAG%"
+set "MCP_VER=%MCP_TAG%"
+set "GAUSS_VER=%GAUSS_TAG%"
+if /i "%RUNTIME_VER:~0,1%"=="v" set "RUNTIME_VER=%RUNTIME_VER:~1%"
+if /i "%SHELL_VER:~0,1%"=="v"   set "SHELL_VER=%SHELL_VER:~1%"
+if /i "%LEIA_VER:~0,1%"=="v"    set "LEIA_VER=%LEIA_VER:~1%"
+if /i "%MCP_VER:~0,1%"=="v"     set "MCP_VER=%MCP_VER:~1%"
+if /i "%GAUSS_VER:~0,1%"=="v"   set "GAUSS_VER=%GAUSS_VER:~1%"
+
 echo ==^> DisplayXR bundle build
 echo     bundle:      v%BUNDLE_VERSION%
 echo     runtime:     %RUNTIME_TAG%
@@ -159,6 +175,11 @@ makensis ^
     "/DLEIA_EXE=%LEIA_EXE_FILE%" ^
     "/DMCP_EXE=%MCP_EXE_FILE%" ^
     "/DGAUSS_EXE=%GAUSS_EXE_FILE%" ^
+    "/DRUNTIME_VER=%RUNTIME_VER%" ^
+    "/DSHELL_VER=%SHELL_VER%" ^
+    "/DLEIA_VER=%LEIA_VER%" ^
+    "/DMCP_VER=%MCP_VER%" ^
+    "/DGAUSS_VER=%GAUSS_VER%" ^
     "/DBUNDLE_STAGE=%BUNDLE_STAGE%" ^
     "/DOUTPUT_DIR=%OUT_DIR%" ^
     "%REPO_ROOT%\installer\windows\DisplayXRBundleInstaller.nsi"
