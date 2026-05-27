@@ -40,6 +40,23 @@
 !ifndef GAUSS_EXE
     !error "GAUSS_EXE not defined"
 !endif
+; Bare (no leading 'v') target versions for the version-compare gate (#346),
+; passed by build-bundle.bat alongside the *_EXE filenames.
+!ifndef RUNTIME_VER
+    !error "RUNTIME_VER not defined"
+!endif
+!ifndef SHELL_VER
+    !error "SHELL_VER not defined"
+!endif
+!ifndef LEIA_VER
+    !error "LEIA_VER not defined"
+!endif
+!ifndef MCP_VER
+    !error "MCP_VER not defined"
+!endif
+!ifndef GAUSS_VER
+    !error "GAUSS_VER not defined"
+!endif
 !ifndef BUNDLE_STAGE
     !error "BUNDLE_STAGE not defined"
 !endif
@@ -62,6 +79,8 @@ ShowUninstDetails show
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 !include "Sections.nsh"
+!include "WordFunc.nsh"
+!insertmacro VersionCompare
 
 !define MUI_ABORTWARNING
 
@@ -93,9 +112,46 @@ Var G_McpInstalled
 Var G_GaussInstalled
 Var G_LeiaProbeHit       ; 1 iff SR Platform DLLs found on disk
 
+; Installed DisplayVersion per child (from its ARP key), read in .onInit
+; and compared against the bundle's pinned target version (#346).
+Var G_RuntimeVer
+Var G_ShellVer
+Var G_LeiaVer
+Var G_McpVer
+Var G_GaussVer
+
 ; Where we cache a copy of the bundle .exe so ARP Modify can re-run it.
 !define BUNDLE_CACHE_DIR  "$APPDATA\DisplayXR\BundleInstaller"
 !define BUNDLE_CACHE_FILE "${BUNDLE_CACHE_DIR}\DisplayXRBundle-${BUNDLE_VERSION}.exe"
+
+;--------------------------------
+; UpgradeOrSkip — for an ALREADY-installed component, re-run its staged
+; sub-installer /S only when the bundle's pinned target version is strictly
+; newer than what's installed (#346). Never downgrades.
+;
+; ${VersionCompare} A B $R0 → $R0: 0 = equal, 1 = A(first) newer,
+; 2 = B(second) newer  (NSIS WordFunc.nsh convention). We pass
+; installed-first, target-second, so "target newer" ⇒ $R0 == 2 ⇒ upgrade.
+; Inverting the argument order silently disables all upgrades.
+;
+; Args: InstalledVer (a $Var)  TargetVer (literal)  ExeName  Human
+;--------------------------------
+!macro UpgradeOrSkip InstalledVer TargetVer ExeName Human
+    ${VersionCompare} "${InstalledVer}" "${TargetVer}" $R0
+    ${If} $R0 == 2
+        DetailPrint "Upgrading ${Human} (${InstalledVer} -> ${TargetVer})..."
+        File "${BUNDLE_STAGE}\${ExeName}"
+        ClearErrors
+        ExecWait '"$INSTDIR\${ExeName}" /S' $0
+        ${If} $0 != 0
+            MessageBox MB_OK|MB_ICONSTOP "${Human} installer exited with code $0. Aborting bundle."
+            Abort
+        ${EndIf}
+        Delete "$INSTDIR\${ExeName}"
+    ${Else}
+        DetailPrint "${Human} ${InstalledVer} is current (target ${TargetVer}) — skipping."
+    ${EndIf}
+!macroend
 
 ;--------------------------------
 ; Component sections.
@@ -114,9 +170,7 @@ Section "DisplayXR Runtime (required)" SecRuntime
     SectionIn RO
     SetOutPath "$INSTDIR"
 
-    ${If} $G_RuntimeInstalled == 1
-        DetailPrint "DisplayXR Runtime already installed — skipping."
-    ${Else}
+    ${If} $G_RuntimeInstalled == 0
         DetailPrint "Installing DisplayXR Runtime..."
         File "${BUNDLE_STAGE}\${RUNTIME_EXE}"
         ClearErrors
@@ -126,6 +180,8 @@ Section "DisplayXR Runtime (required)" SecRuntime
             Abort
         ${EndIf}
         Delete "$INSTDIR\${RUNTIME_EXE}"
+    ${Else}
+        !insertmacro UpgradeOrSkip $G_RuntimeVer "${RUNTIME_VER}" "${RUNTIME_EXE}" "DisplayXR Runtime"
     ${EndIf}
 SectionEnd
 
@@ -133,9 +189,7 @@ SectionGroup /e "Workspace" SecGrpWorkspace
     Section "DisplayXR Shell" SecShell
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecShell}
-            ${If} $G_ShellInstalled == 1
-                DetailPrint "DisplayXR Shell already installed — skipping."
-            ${Else}
+            ${If} $G_ShellInstalled == 0
                 DetailPrint "Installing DisplayXR Shell..."
                 File "${BUNDLE_STAGE}\${SHELL_EXE}"
                 ClearErrors
@@ -145,6 +199,8 @@ SectionGroup /e "Workspace" SecGrpWorkspace
                     Abort
                 ${EndIf}
                 Delete "$INSTDIR\${SHELL_EXE}"
+            ${Else}
+                !insertmacro UpgradeOrSkip $G_ShellVer "${SHELL_VER}" "${SHELL_EXE}" "DisplayXR Shell"
             ${EndIf}
         ${ElseIf} $G_ShellInstalled == 1
             DetailPrint "Removing DisplayXR Shell..."
@@ -158,9 +214,7 @@ SectionGroup /e "Workspace" SecGrpWorkspace
     Section "MCP Tools" SecMcp
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecMcp}
-            ${If} $G_McpInstalled == 1
-                DetailPrint "DisplayXR MCP Tools already installed — skipping."
-            ${Else}
+            ${If} $G_McpInstalled == 0
                 DetailPrint "Installing DisplayXR MCP Tools..."
                 File "${BUNDLE_STAGE}\${MCP_EXE}"
                 ClearErrors
@@ -170,6 +224,8 @@ SectionGroup /e "Workspace" SecGrpWorkspace
                     Abort
                 ${EndIf}
                 Delete "$INSTDIR\${MCP_EXE}"
+            ${Else}
+                !insertmacro UpgradeOrSkip $G_McpVer "${MCP_VER}" "${MCP_EXE}" "DisplayXR MCP Tools"
             ${EndIf}
         ${ElseIf} $G_McpInstalled == 1
             DetailPrint "Removing DisplayXR MCP Tools..."
@@ -185,9 +241,7 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
     Section "Leia SR plug-in" SecLeia
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecLeia}
-            ${If} $G_LeiaInstalled == 1
-                DetailPrint "Leia SR plug-in already installed — skipping."
-            ${Else}
+            ${If} $G_LeiaInstalled == 0
                 DetailPrint "Installing Leia SR plug-in..."
                 File "${BUNDLE_STAGE}\${LEIA_EXE}"
                 ClearErrors
@@ -197,6 +251,8 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
                     Abort
                 ${EndIf}
                 Delete "$INSTDIR\${LEIA_EXE}"
+            ${Else}
+                !insertmacro UpgradeOrSkip $G_LeiaVer "${LEIA_VER}" "${LEIA_EXE}" "Leia SR plug-in"
             ${EndIf}
         ${ElseIf} $G_LeiaInstalled == 1
             DetailPrint "Removing Leia SR plug-in..."
@@ -212,9 +268,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
     Section "Gaussian Splat viewer" SecGauss
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecGauss}
-            ${If} $G_GaussInstalled == 1
-                DetailPrint "Gaussian Splat viewer already installed — skipping."
-            ${Else}
+            ${If} $G_GaussInstalled == 0
                 DetailPrint "Installing Gaussian Splat viewer..."
                 File "${BUNDLE_STAGE}\${GAUSS_EXE}"
                 ClearErrors
@@ -224,6 +278,8 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                     Abort
                 ${EndIf}
                 Delete "$INSTDIR\${GAUSS_EXE}"
+            ${Else}
+                !insertmacro UpgradeOrSkip $G_GaussVer "${GAUSS_VER}" "${GAUSS_EXE}" "Gaussian Splat viewer"
             ${EndIf}
         ${ElseIf} $G_GaussInstalled == 1
             DetailPrint "Removing Gaussian Splat viewer..."
@@ -268,6 +324,29 @@ Section "-FinalizeBundleArp"
         "NoModify" 0
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
         "NoRepair" 1
+
+    ; -----------------------------------------------------------------
+    ; #342: Restart displayxr-service so it re-probes display processors
+    ; AFTER every component (esp. the Leia plug-in) has registered its
+    ; HKLM\Software\DisplayXR\DisplayProcessors\* manifest. The runtime
+    ; installer starts the service at the end of its OWN section, which
+    ; runs before the later Leia section — so without this, a fresh
+    ; install's service binds the sim-display fallback (ProbeOrder 200)
+    ; instead of leia-sr (50) and shows no weave until the next restart.
+    ; -----------------------------------------------------------------
+    DetailPrint "Restarting DisplayXR Service to re-probe display processors..."
+    nsExec::ExecToLog 'taskkill /f /im displayxr-service.exe'
+    Pop $0
+    Sleep 1500   ; let the killed process release its handles
+
+    ReadRegStr $1 HKLM "Software\DisplayXR\Runtime" "InstallPath"
+    ${If} $1 != ""
+    ${AndIf} ${FileExists} "$1\displayxr-service.exe"
+        Exec '"$1\displayxr-service.exe"'   ; non-blocking, mirrors the runtime installer
+        DetailPrint "DisplayXR Service restarted from $1."
+    ${Else}
+        DetailPrint "displayxr-service.exe not found via Software\DisplayXR\Runtime\InstallPath ($1) — skipping restart."
+    ${EndIf}
 SectionEnd
 
 ;--------------------------------
@@ -293,18 +372,25 @@ Function .onInit
     StrCpy $G_McpInstalled     0
     StrCpy $G_GaussInstalled   0
     StrCpy $G_LeiaProbeHit     0
+    StrCpy $G_RuntimeVer       ""
+    StrCpy $G_ShellVer         ""
+    StrCpy $G_LeiaVer          ""
+    StrCpy $G_McpVer           ""
+    StrCpy $G_GaussVer         ""
 
     ; Runtime is RO so its checkbox state can't be unset; still record
     ; install state to skip a redundant /S re-run.
     ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXR" "UninstallString"
     ${If} $0 != ""
         StrCpy $G_RuntimeInstalled 1
+        ReadRegStr $G_RuntimeVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXR" "DisplayVersion"
     ${EndIf}
 
     ; Shell — default-checked. Pre-checked when already installed too.
     ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRShell" "UninstallString"
     ${If} $0 != ""
         StrCpy $G_ShellInstalled 1
+        ReadRegStr $G_ShellVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRShell" "DisplayVersion"
         !insertmacro SelectSection ${SecShell}
     ${EndIf}
 
@@ -312,6 +398,7 @@ Function .onInit
     ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMCP" "UninstallString"
     ${If} $0 != ""
         StrCpy $G_McpInstalled 1
+        ReadRegStr $G_McpVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMCP" "DisplayVersion"
         !insertmacro SelectSection ${SecMcp}
     ${EndIf}
 
@@ -319,6 +406,7 @@ Function .onInit
     ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRGaussianSplat" "UninstallString"
     ${If} $0 != ""
         StrCpy $G_GaussInstalled 1
+        ReadRegStr $G_GaussVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRGaussianSplat" "DisplayVersion"
         !insertmacro SelectSection ${SecGauss}
     ${EndIf}
 
@@ -336,6 +424,7 @@ Function .onInit
     ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaSR" "UninstallString"
     ${If} $0 != ""
         StrCpy $G_LeiaInstalled 1
+        ReadRegStr $G_LeiaVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaSR" "DisplayVersion"
         !insertmacro SelectSection ${SecLeia}
     ${ElseIf} $G_LeiaProbeHit == 1
         !insertmacro SelectSection ${SecLeia}
