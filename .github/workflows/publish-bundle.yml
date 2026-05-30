@@ -17,10 +17,30 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: write   # release job needs it; drift-guard only reads
 
 jobs:
+  # Belt-and-braces drift guard: versions.json in this repo is mirrored
+  # byte-for-byte from displayxr-runtime/versions.json by the runtime's
+  # versions-bump.yml. If a human hand-edited this repo's file (or the
+  # mirror step ever silently failed), the bundle should refuse to
+  # build a stack that doesn't match the dev orchestrator's pin matrix.
+  # See displayxr-runtime/docs/specs/runtime/versions-json-autobump.md.
+  assert-versions-in-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare against displayxr-runtime/versions.json
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/DisplayXR/displayxr-runtime/main/versions.json -o /tmp/runtime-versions.json
+          if ! diff -u /tmp/runtime-versions.json versions.json; then
+            echo "::error::versions.json drift detected. This file is auto-mirrored from displayxr-runtime; do not hand-edit. If a previous mirror commit failed, re-run displayxr-runtime/.github/workflows/versions-bump.yml or fire the runtime's BumpVersionsJsonOnTag job."
+            exit 1
+          fi
+          echo "versions.json matches displayxr-runtime/main — proceeding with bundle build."
+
   build-macos:
+    needs: assert-versions-in-sync
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +60,7 @@ jobs:
           if-no-files-found: error
 
   build-windows:
+    needs: assert-versions-in-sync
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
