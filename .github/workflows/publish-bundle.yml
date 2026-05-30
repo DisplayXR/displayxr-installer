@@ -31,10 +31,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Compare against displayxr-runtime/versions.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          curl -fsSL https://raw.githubusercontent.com/DisplayXR/displayxr-runtime/main/versions.json -o /tmp/runtime-versions.json
+          # GitHub Contents API, not raw.githubusercontent.com — the latter
+          # is CDN-cached and can lag 1–5 min after a push, which would
+          # produce false positives right after a fresh mirror commit. The
+          # Contents API is authoritative; mirror-then-publish is safe.
+          gh api repos/DisplayXR/displayxr-runtime/contents/versions.json \
+              --jq '.content' | base64 -d > /tmp/runtime-versions.json
           if ! diff -u /tmp/runtime-versions.json versions.json; then
-            echo "::error::versions.json drift detected. This file is auto-mirrored from displayxr-runtime; do not hand-edit. If a previous mirror commit failed, re-run displayxr-runtime/.github/workflows/versions-bump.yml or fire the runtime's BumpVersionsJsonOnTag job."
+            echo "::error::versions.json drift detected. This file is auto-mirrored from displayxr-runtime; do not hand-edit. If a previous mirror commit failed, re-run displayxr-runtime/.github/workflows/versions-bump.yml (or its BumpVersionsJsonOnTag job) — never patch this file by hand."
             exit 1
           fi
           echo "versions.json matches displayxr-runtime/main — proceeding with bundle build."
