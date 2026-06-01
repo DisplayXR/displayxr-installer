@@ -19,6 +19,7 @@
 ;   LEIA_EXE         filename of staged leia plug-in installer
 ;   MCP_EXE          filename of staged mcp tools installer
 ;   GAUSS_EXE        filename of staged gaussian splat demo installer
+;   MODELVIEWER_EXE  filename of staged 3D model viewer demo installer
 ;   BUNDLE_STAGE     absolute path to dir containing the staged .exe files + LICENSE
 ;   OUTPUT_DIR       absolute path for OutFile
 
@@ -40,6 +41,9 @@
 !ifndef GAUSS_EXE
     !error "GAUSS_EXE not defined"
 !endif
+!ifndef MODELVIEWER_EXE
+    !error "MODELVIEWER_EXE not defined"
+!endif
 ; Bare (no leading 'v') target versions for the version-compare gate (#346),
 ; passed by build-bundle.bat alongside the *_EXE filenames.
 !ifndef RUNTIME_VER
@@ -56,6 +60,9 @@
 !endif
 !ifndef GAUSS_VER
     !error "GAUSS_VER not defined"
+!endif
+!ifndef MODELVIEWER_VER
+    !error "MODELVIEWER_VER not defined"
 !endif
 !ifndef BUNDLE_STAGE
     !error "BUNDLE_STAGE not defined"
@@ -110,6 +117,7 @@ Var G_ShellInstalled
 Var G_LeiaInstalled
 Var G_McpInstalled
 Var G_GaussInstalled
+Var G_ModelViewerInstalled
 Var G_LeiaProbeHit       ; 1 iff SR Platform DLLs found on disk
 
 ; Installed DisplayVersion per child (from its ARP key), read in .onInit
@@ -119,6 +127,7 @@ Var G_ShellVer
 Var G_LeiaVer
 Var G_McpVer
 Var G_GaussVer
+Var G_ModelViewerVer
 
 ; Where we cache a copy of the bundle .exe so ARP Modify can re-run it.
 !define BUNDLE_CACHE_DIR  "$APPDATA\DisplayXR\BundleInstaller"
@@ -289,6 +298,31 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ${EndIf}
         ${EndIf}
     SectionEnd
+
+    Section "3D Model Viewer" SecModelViewer
+        SetOutPath "$INSTDIR"
+        ${If} ${SectionIsSelected} ${SecModelViewer}
+            ${If} $G_ModelViewerInstalled == 0
+                DetailPrint "Installing 3D Model Viewer..."
+                File "${BUNDLE_STAGE}\${MODELVIEWER_EXE}"
+                ClearErrors
+                ExecWait '"$INSTDIR\${MODELVIEWER_EXE}" /S' $0
+                ${If} $0 != 0
+                    MessageBox MB_OK|MB_ICONSTOP "3D Model Viewer installer exited with code $0. Aborting bundle."
+                    Abort
+                ${EndIf}
+                Delete "$INSTDIR\${MODELVIEWER_EXE}"
+            ${Else}
+                !insertmacro UpgradeOrSkip $G_ModelViewerVer "${MODELVIEWER_VER}" "${MODELVIEWER_EXE}" "3D Model Viewer"
+            ${EndIf}
+        ${ElseIf} $G_ModelViewerInstalled == 1
+            DetailPrint "Removing 3D Model Viewer..."
+            ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRModelViewer" "UninstallString"
+            ${If} $1 != ""
+                ExecWait '$1 /S' $0
+            ${EndIf}
+        ${EndIf}
+    SectionEnd
 SectionGroupEnd
 
 ;--------------------------------
@@ -371,12 +405,14 @@ Function .onInit
     StrCpy $G_LeiaInstalled    0
     StrCpy $G_McpInstalled     0
     StrCpy $G_GaussInstalled   0
+    StrCpy $G_ModelViewerInstalled 0
     StrCpy $G_LeiaProbeHit     0
     StrCpy $G_RuntimeVer       ""
     StrCpy $G_ShellVer         ""
     StrCpy $G_LeiaVer          ""
     StrCpy $G_McpVer           ""
     StrCpy $G_GaussVer         ""
+    StrCpy $G_ModelViewerVer   ""
 
     ; Runtime is RO so its checkbox state can't be unset; still record
     ; install state to skip a redundant /S re-run.
@@ -408,6 +444,14 @@ Function .onInit
         StrCpy $G_GaussInstalled 1
         ReadRegStr $G_GaussVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRGaussianSplat" "DisplayVersion"
         !insertmacro SelectSection ${SecGauss}
+    ${EndIf}
+
+    ; Model viewer demo — default-checked. Pre-checked when already installed.
+    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRModelViewer" "UninstallString"
+    ${If} $0 != ""
+        StrCpy $G_ModelViewerInstalled 1
+        ReadRegStr $G_ModelViewerVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRModelViewer" "DisplayVersion"
+        !insertmacro SelectSection ${SecModelViewer}
     ${EndIf}
 
     ; Leia — probe SR Platform install path before deciding default.
@@ -447,6 +491,7 @@ LangString DESC_SecShell   ${LANG_ENGLISH} "Spatial workspace + window manager f
 LangString DESC_SecMcp     ${LANG_ENGLISH} "Claude / AI control adapter for DisplayXR. Required for the displayxr-mcp Tools experience."
 LangString DESC_SecLeia    ${LANG_ENGLISH} "Display processor for Leia SR 3D monitors. Auto-selected when SR Platform is detected."
 LangString DESC_SecGauss   ${LANG_ENGLISH} "Sample 3D scene viewer (Gaussian splatting renderer). Standalone DisplayXR app."
+LangString DESC_SecModelViewer ${LANG_ENGLISH} "glTF 2.0 PBR model viewer (.glb/.gltf). Standalone DisplayXR app."
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
     !insertmacro MUI_DESCRIPTION_TEXT ${SecRuntime} $(DESC_SecRuntime)
@@ -454,6 +499,7 @@ LangString DESC_SecGauss   ${LANG_ENGLISH} "Sample 3D scene viewer (Gaussian spl
     !insertmacro MUI_DESCRIPTION_TEXT ${SecMcp}     $(DESC_SecMcp)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecLeia}    $(DESC_SecLeia)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecGauss}   $(DESC_SecGauss)
+    !insertmacro MUI_DESCRIPTION_TEXT ${SecModelViewer} $(DESC_SecModelViewer)
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 
@@ -462,7 +508,7 @@ LangString DESC_SecGauss   ${LANG_ENGLISH} "Sample 3D scene viewer (Gaussian spl
 ;--------------------------------
 ;
 ; Walk each child's UninstallString in reverse install order
-; (Gauss → MCP → Leia → Shell → Runtime). Runtime last so its
+; (ModelViewer → Gauss → MCP → Leia → Shell → Runtime). Runtime last so its
 ; DeleteRegKey /ifempty Software\DisplayXR cleanup catches any orphan
 ; subkeys (per PR DisplayXR/displayxr-runtime#291 fix #4). The chain
 ; gracefully skips any child whose ARP key is absent — covers
@@ -470,6 +516,14 @@ LangString DESC_SecGauss   ${LANG_ENGLISH} "Sample 3D scene viewer (Gaussian spl
 
 Section "Uninstall"
     Var /GLOBAL ChildUninstall
+
+    ; -- 3D Model Viewer --
+    ClearErrors
+    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRModelViewer" "UninstallString"
+    ${If} $ChildUninstall != ""
+        DetailPrint "Uninstalling 3D Model Viewer..."
+        ExecWait '$ChildUninstall /S' $0
+    ${EndIf}
 
     ; -- Gaussian Splat viewer --
     ClearErrors
