@@ -196,6 +196,7 @@ process_component mcp_tools   "$MCP_TAG"
 # only one with a macOS .pkg today (displayxr-demo-gaussiansplat v1.4.0).
 # Activation also requires runtime's components.sh to carry a gauss_demo
 # entry — graceful skip otherwise.
+# modelviewer_demo is Windows-only (no macOS .pkg yet) — intentionally not bundled on macOS.
 process_component gauss_demo  "$GAUSS_TAG"
 
 if [[ -z "$CHOICE_LINES" ]]; then
