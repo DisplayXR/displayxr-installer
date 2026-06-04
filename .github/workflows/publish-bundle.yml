@@ -95,6 +95,12 @@ jobs:
   release:
     needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
+    env:
+      # Mapped to a job-level env so the OneDrive steps can gate on its
+      # presence (the `secrets` context isn't usable in step `if:`). NOT
+      # named RCLONE_CONFIG — that's a reserved rclone var pointing at a
+      # config *file path*, which would break `rclone copy`.
+      RCLONE_CONFIG_CONTENTS: ${{ secrets.RCLONE_CONFIG }}
     steps:
       - uses: actions/checkout@v4
 
@@ -117,3 +123,31 @@ jobs:
             _out/DisplayXRBundle-*.pkg
             _out/DisplayXRBundle-*.exe
           fail_on_unmatched_files: true
+
+      # Mirror the Windows bundle installer to OneDrive on release. This is
+      # the single OneDrive upload point for the whole stack — the runtime
+      # repo no longer pushes per-CI build artifacts there. Gated on the
+      # RCLONE_CONFIG secret being present (skips cleanly on a fork or if the
+      # secret is unset) so the release itself never fails on its absence.
+      - name: Install rclone
+        if: env.RCLONE_CONFIG_CONTENTS != ''
+        run: |
+          curl -O https://downloads.rclone.org/rclone-current-linux-amd64.zip
+          unzip rclone-current-linux-amd64.zip
+          sudo cp rclone-*-linux-amd64/rclone /usr/local/bin/
+          rclone --version
+
+      - name: Setup rclone config
+        if: env.RCLONE_CONFIG_CONTENTS != ''
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONFIG_CONTENTS" > ~/.config/rclone/rclone.conf
+
+      - name: Upload Windows bundle installer to OneDrive
+        if: env.RCLONE_CONFIG_CONTENTS != ''
+        run: |
+          destPath="SANDBOX/RUNTIMES + SDK + PLUGINS/OpenXR"
+          installer=$(ls _out/DisplayXRBundle-*.exe | head -n1)
+          echo "Uploading $(basename "$installer") to OneDrive: $destPath"
+          rclone copy "$installer" "onedrive:$destPath" --progress
+          echo "Upload complete!"
