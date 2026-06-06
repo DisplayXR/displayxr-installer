@@ -143,15 +143,20 @@ Var G_ModelViewerVer
 ; installed-first, target-second, so "target newer" ⇒ $R0 == 2 ⇒ upgrade.
 ; Inverting the argument order silently disables all upgrades.
 ;
-; Args: InstalledVer (a $Var)  TargetVer (literal)  ExeName  Human
+; ExtraArgs: extra switches for the child's silent run — "/NOSTART" for
+; children that would otherwise launch displayxr-service mid-chain
+; (runtime, leia; #461 on the runtime repo), "" for the rest. Older child
+; installers ignore unknown switches, so passing it is always safe.
+;
+; Args: InstalledVer (a $Var)  TargetVer (literal)  ExeName  Human  ExtraArgs
 ;--------------------------------
-!macro UpgradeOrSkip InstalledVer TargetVer ExeName Human
+!macro UpgradeOrSkip InstalledVer TargetVer ExeName Human ExtraArgs
     ${VersionCompare} "${InstalledVer}" "${TargetVer}" $R0
     ${If} $R0 == 2
         DetailPrint "Upgrading ${Human} (${InstalledVer} -> ${TargetVer})..."
         File "${BUNDLE_STAGE}\${ExeName}"
         ClearErrors
-        ExecWait '"$INSTDIR\${ExeName}" /S' $0
+        ExecWait '"$INSTDIR\${ExeName}" /S ${ExtraArgs}' $0
         ${If} $0 != 0
             MessageBox MB_OK|MB_ICONSTOP "${Human} installer exited with code $0. Aborting bundle."
             Abort
@@ -175,6 +180,26 @@ Var G_ModelViewerVer
 ; body just skips re-install when already present.
 ;--------------------------------
 
+;--------------------------------
+; #461 (runtime repo): stop DisplayXR processes ONCE before any child
+; installer runs. A running displayxr-service has plug-in DLLs mapped;
+; NSIS /S installs skip locked files SILENTLY (exit 0), which is how the
+; v0.14.0 bundle left a stale Leia DLL on disk under a fresh registry
+; Version. Covers every chain shape — including "leia-only upgrade",
+; where the logon-started service would otherwise hold the DLL. The
+; service is restarted exactly once at the end (-FinalizeBundleArp,
+; #342); children are invoked with /NOSTART so none of them brings it
+; back mid-chain.
+;--------------------------------
+Section "-StopDisplayXRProcesses"
+    DetailPrint "Stopping DisplayXR processes for the install chain..."
+    nsExec::ExecToLog 'taskkill /f /im displayxr-shell.exe'
+    Pop $0
+    nsExec::ExecToLog 'taskkill /f /im displayxr-service.exe'
+    Pop $0
+    Sleep 1500   ; let killed processes release their file handles
+SectionEnd
+
 Section "DisplayXR Runtime (required)" SecRuntime
     SectionIn RO
     SetOutPath "$INSTDIR"
@@ -183,14 +208,14 @@ Section "DisplayXR Runtime (required)" SecRuntime
         DetailPrint "Installing DisplayXR Runtime..."
         File "${BUNDLE_STAGE}\${RUNTIME_EXE}"
         ClearErrors
-        ExecWait '"$INSTDIR\${RUNTIME_EXE}" /S' $0
+        ExecWait '"$INSTDIR\${RUNTIME_EXE}" /S /NOSTART' $0
         ${If} $0 != 0
             MessageBox MB_OK|MB_ICONSTOP "DisplayXR Runtime installer exited with code $0. Aborting bundle."
             Abort
         ${EndIf}
         Delete "$INSTDIR\${RUNTIME_EXE}"
     ${Else}
-        !insertmacro UpgradeOrSkip $G_RuntimeVer "${RUNTIME_VER}" "${RUNTIME_EXE}" "DisplayXR Runtime"
+        !insertmacro UpgradeOrSkip $G_RuntimeVer "${RUNTIME_VER}" "${RUNTIME_EXE}" "DisplayXR Runtime" "/NOSTART"
     ${EndIf}
 SectionEnd
 
@@ -209,7 +234,7 @@ SectionGroup /e "Workspace" SecGrpWorkspace
                 ${EndIf}
                 Delete "$INSTDIR\${SHELL_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_ShellVer "${SHELL_VER}" "${SHELL_EXE}" "DisplayXR Shell"
+                !insertmacro UpgradeOrSkip $G_ShellVer "${SHELL_VER}" "${SHELL_EXE}" "DisplayXR Shell" ""
             ${EndIf}
         ${ElseIf} $G_ShellInstalled == 1
             DetailPrint "Removing DisplayXR Shell..."
@@ -234,7 +259,7 @@ SectionGroup /e "Workspace" SecGrpWorkspace
                 ${EndIf}
                 Delete "$INSTDIR\${MCP_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_McpVer "${MCP_VER}" "${MCP_EXE}" "DisplayXR MCP Tools"
+                !insertmacro UpgradeOrSkip $G_McpVer "${MCP_VER}" "${MCP_EXE}" "DisplayXR MCP Tools" ""
             ${EndIf}
         ${ElseIf} $G_McpInstalled == 1
             DetailPrint "Removing DisplayXR MCP Tools..."
@@ -254,14 +279,14 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
                 DetailPrint "Installing Leia SR plug-in..."
                 File "${BUNDLE_STAGE}\${LEIA_EXE}"
                 ClearErrors
-                ExecWait '"$INSTDIR\${LEIA_EXE}" /S' $0
+                ExecWait '"$INSTDIR\${LEIA_EXE}" /S /NOSTART' $0
                 ${If} $0 != 0
                     MessageBox MB_OK|MB_ICONSTOP "Leia SR plug-in installer exited with code $0. Aborting bundle."
                     Abort
                 ${EndIf}
                 Delete "$INSTDIR\${LEIA_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_LeiaVer "${LEIA_VER}" "${LEIA_EXE}" "Leia SR plug-in"
+                !insertmacro UpgradeOrSkip $G_LeiaVer "${LEIA_VER}" "${LEIA_EXE}" "Leia SR plug-in" "/NOSTART"
             ${EndIf}
         ${ElseIf} $G_LeiaInstalled == 1
             DetailPrint "Removing Leia SR plug-in..."
@@ -288,7 +313,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 ${EndIf}
                 Delete "$INSTDIR\${GAUSS_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_GaussVer "${GAUSS_VER}" "${GAUSS_EXE}" "Gaussian Splat viewer"
+                !insertmacro UpgradeOrSkip $G_GaussVer "${GAUSS_VER}" "${GAUSS_EXE}" "Gaussian Splat viewer" ""
             ${EndIf}
         ${ElseIf} $G_GaussInstalled == 1
             DetailPrint "Removing Gaussian Splat viewer..."
@@ -313,7 +338,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 ${EndIf}
                 Delete "$INSTDIR\${MODELVIEWER_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_ModelViewerVer "${MODELVIEWER_VER}" "${MODELVIEWER_EXE}" "3D Model Viewer"
+                !insertmacro UpgradeOrSkip $G_ModelViewerVer "${MODELVIEWER_VER}" "${MODELVIEWER_EXE}" "3D Model Viewer" ""
             ${EndIf}
         ${ElseIf} $G_ModelViewerInstalled == 1
             DetailPrint "Removing 3D Model Viewer..."
