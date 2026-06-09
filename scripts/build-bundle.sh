@@ -67,6 +67,8 @@ SHELL_TAG="$(jq -r '.shell' "$REPO_ROOT/versions.json")"
 LEIA_TAG="$(jq -r '.leia_plugin' "$REPO_ROOT/versions.json")"
 MCP_TAG="$(jq -r '.mcp_tools' "$REPO_ROOT/versions.json")"
 GAUSS_TAG="$(jq -r '.gauss_demo' "$REPO_ROOT/versions.json")"
+MODELVIEWER_TAG="$(jq -r '.modelviewer_demo' "$REPO_ROOT/versions.json")"
+MEDIAPLAYER_TAG="$(jq -r '.mediaplayer_demo' "$REPO_ROOT/versions.json")"
 
 cat <<EOF
 ==> DisplayXR bundle build
@@ -76,6 +78,8 @@ cat <<EOF
     leia_plugin: $LEIA_TAG
     mcp_tools:   $MCP_TAG
     gauss_demo:  $GAUSS_TAG
+    modelviewer: $MODELVIEWER_TAG
+    mediaplayer: $MEDIAPLAYER_TAG
 EOF
 
 # 2. Walk components; download any with a non-empty macOS asset glob and
@@ -128,6 +132,12 @@ process_component() {
             ;;
         gauss_demo)
             extract_gauss_demo "$expanded"
+            ;;
+        modelviewer_demo)
+            extract_modelviewer_demo "$expanded"
+            ;;
+        mediaplayer_demo)
+            extract_mediaplayer_demo "$expanded"
             ;;
         shell|leia_plugin|mcp_tools)
             # Future: shell/leia/mcp don't ship macOS .pkg today. When
@@ -188,16 +198,67 @@ extract_gauss_demo() {
 "
 }
 
+# extract_modelviewer_demo: same shape as extract_gauss_demo. The demo .pkg
+# is a productbuild distribution with one component named modelviewer.pkg
+# inside (identifier com.displayxr.modelviewer). User-toggleable (opt-in demo).
+extract_modelviewer_demo() {
+    local expanded="$1"
+    local comp_dir="$expanded/modelviewer.pkg"
+    if [[ ! -d "$comp_dir" ]]; then
+        echo "ERROR: modelviewer.pkg not found inside expanded modelviewer_demo distribution" >&2
+        echo "       (expected $comp_dir; check that the demo release artifact is a productbuild distribution)" >&2
+        exit 1
+    fi
+    local flat="$COMPONENTS_DIR/modelviewer_demo.pkg"
+    pkgutil --flatten "$comp_dir" "$flat"
+
+    CHOICE_LINES+="        <line choice=\"modelviewer_demo\"/>"$'\n'
+    CHOICES+="    <choice id=\"modelviewer_demo\" visible=\"true\" start_selected=\"true\"
+        title=\"3D Model Viewer\"
+        description=\"DisplayXR demo: glTF 2.0 PBR model viewer (.glb/.gltf) for glasses-free 3D displays. Installs to /Applications/3D Model Viewer.app. Optional.\">
+        <pkg-ref id=\"com.displayxr.modelviewer\"/>
+    </choice>
+"
+    PKG_REFS+="    <pkg-ref id=\"com.displayxr.modelviewer\" version=\"${MODELVIEWER_TAG#v}\" onConclusion=\"none\">modelviewer_demo.pkg</pkg-ref>
+"
+}
+
+# extract_mediaplayer_demo: same shape. Inner component is mediaplayer.pkg
+# (identifier com.displayxr.mediaplayer). User-toggleable (opt-in demo).
+extract_mediaplayer_demo() {
+    local expanded="$1"
+    local comp_dir="$expanded/mediaplayer.pkg"
+    if [[ ! -d "$comp_dir" ]]; then
+        echo "ERROR: mediaplayer.pkg not found inside expanded mediaplayer_demo distribution" >&2
+        echo "       (expected $comp_dir; check that the demo release artifact is a productbuild distribution)" >&2
+        exit 1
+    fi
+    local flat="$COMPONENTS_DIR/mediaplayer_demo.pkg"
+    pkgutil --flatten "$comp_dir" "$flat"
+
+    CHOICE_LINES+="        <line choice=\"mediaplayer_demo\"/>"$'\n'
+    CHOICES+="    <choice id=\"mediaplayer_demo\" visible=\"true\" start_selected=\"true\"
+        title=\"Stereo Media Player\"
+        description=\"DisplayXR demo: stereo 3D photo/video media player for glasses-free 3D displays. Installs to /Applications/Stereo Media Player.app. Optional.\">
+        <pkg-ref id=\"com.displayxr.mediaplayer\"/>
+    </choice>
+"
+    PKG_REFS+="    <pkg-ref id=\"com.displayxr.mediaplayer\" version=\"${MEDIAPLAYER_TAG#v}\" onConclusion=\"none\">mediaplayer_demo.pkg</pkg-ref>
+"
+}
+
 process_component runtime     "$RUNTIME_TAG"
 process_component shell       "$SHELL_TAG"
 process_component leia_plugin "$LEIA_TAG"
 process_component mcp_tools   "$MCP_TAG"
-# Demos go after core components in the install UI. gauss_demo is the
-# only one with a macOS .pkg today (displayxr-demo-gaussiansplat v1.4.0).
-# Activation also requires runtime's components.sh to carry a gauss_demo
-# entry — graceful skip otherwise.
-# modelviewer_demo is Windows-only (no macOS .pkg yet) — intentionally not bundled on macOS.
-process_component gauss_demo  "$GAUSS_TAG"
+# Demos go after core components in the install UI. All three ship a macOS
+# .pkg (gauss, model viewer, media player). process_component gracefully
+# skips any whose runtime components.sh table has an empty PKG_MACOS glob,
+# so calling it unconditionally is safe and keeps macOS in lockstep with
+# the Windows bundle's demo set.
+process_component gauss_demo       "$GAUSS_TAG"
+process_component modelviewer_demo "$MODELVIEWER_TAG"
+process_component mediaplayer_demo "$MEDIAPLAYER_TAG"
 
 if [[ -z "$CHOICE_LINES" ]]; then
     echo "ERROR: no components produced a macOS .pkg — nothing to bundle" >&2
