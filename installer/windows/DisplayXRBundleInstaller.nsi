@@ -1,6 +1,7 @@
 ; DisplayXR end-user meta-installer (issue DisplayXR/displayxr-runtime#284)
-; Chains the Runtime + Shell + Leia plug-in + MCP Tools + Gaussian Splat
-; demo installers in one guided flow. Each child is invoked silently
+; Chains the Runtime + Shell + Leia plug-in + MCP Tools + Gaussian Splat,
+; 3D Model Viewer, and Stereo Media Player demo installers in one guided
+; flow. Each child is invoked silently
 ; (/S); the bundle itself takes the single UAC prompt + SmartScreen
 ; warning at launch.
 ;
@@ -20,6 +21,7 @@
 ;   MCP_EXE          filename of staged mcp tools installer
 ;   GAUSS_EXE        filename of staged gaussian splat demo installer
 ;   MODELVIEWER_EXE  filename of staged 3D model viewer demo installer
+;   MEDIAPLAYER_EXE  filename of staged stereo media player demo installer
 ;   BUNDLE_STAGE     absolute path to dir containing the staged .exe files + LICENSE
 ;   OUTPUT_DIR       absolute path for OutFile
 
@@ -44,6 +46,9 @@
 !ifndef MODELVIEWER_EXE
     !error "MODELVIEWER_EXE not defined"
 !endif
+!ifndef MEDIAPLAYER_EXE
+    !error "MEDIAPLAYER_EXE not defined"
+!endif
 ; Bare (no leading 'v') target versions for the version-compare gate (#346),
 ; passed by build-bundle.bat alongside the *_EXE filenames.
 !ifndef RUNTIME_VER
@@ -63,6 +68,9 @@
 !endif
 !ifndef MODELVIEWER_VER
     !error "MODELVIEWER_VER not defined"
+!endif
+!ifndef MEDIAPLAYER_VER
+    !error "MEDIAPLAYER_VER not defined"
 !endif
 !ifndef BUNDLE_STAGE
     !error "BUNDLE_STAGE not defined"
@@ -118,6 +126,7 @@ Var G_LeiaInstalled
 Var G_McpInstalled
 Var G_GaussInstalled
 Var G_ModelViewerInstalled
+Var G_MediaPlayerInstalled
 Var G_LeiaProbeHit       ; 1 iff SR Platform DLLs found on disk
 
 ; Installed DisplayVersion per child (from its ARP key), read in .onInit
@@ -128,6 +137,7 @@ Var G_LeiaVer
 Var G_McpVer
 Var G_GaussVer
 Var G_ModelViewerVer
+Var G_MediaPlayerVer
 
 ; Where we cache a copy of the bundle .exe so ARP Modify can re-run it.
 !define BUNDLE_CACHE_DIR  "$APPDATA\DisplayXR\BundleInstaller"
@@ -348,6 +358,31 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ${EndIf}
         ${EndIf}
     SectionEnd
+
+    Section "Stereo Media Player" SecMediaPlayer
+        SetOutPath "$INSTDIR"
+        ${If} ${SectionIsSelected} ${SecMediaPlayer}
+            ${If} $G_MediaPlayerInstalled == 0
+                DetailPrint "Installing Stereo Media Player..."
+                File "${BUNDLE_STAGE}\${MEDIAPLAYER_EXE}"
+                ClearErrors
+                ExecWait '"$INSTDIR\${MEDIAPLAYER_EXE}" /S' $0
+                ${If} $0 != 0
+                    MessageBox MB_OK|MB_ICONSTOP "Stereo Media Player installer exited with code $0. Aborting bundle."
+                    Abort
+                ${EndIf}
+                Delete "$INSTDIR\${MEDIAPLAYER_EXE}"
+            ${Else}
+                !insertmacro UpgradeOrSkip $G_MediaPlayerVer "${MEDIAPLAYER_VER}" "${MEDIAPLAYER_EXE}" "Stereo Media Player" ""
+            ${EndIf}
+        ${ElseIf} $G_MediaPlayerInstalled == 1
+            DetailPrint "Removing Stereo Media Player..."
+            ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMediaPlayer" "UninstallString"
+            ${If} $1 != ""
+                ExecWait '$1 /S' $0
+            ${EndIf}
+        ${EndIf}
+    SectionEnd
 SectionGroupEnd
 
 ;--------------------------------
@@ -431,6 +466,7 @@ Function .onInit
     StrCpy $G_McpInstalled     0
     StrCpy $G_GaussInstalled   0
     StrCpy $G_ModelViewerInstalled 0
+    StrCpy $G_MediaPlayerInstalled 0
     StrCpy $G_LeiaProbeHit     0
     StrCpy $G_RuntimeVer       ""
     StrCpy $G_ShellVer         ""
@@ -438,6 +474,7 @@ Function .onInit
     StrCpy $G_McpVer           ""
     StrCpy $G_GaussVer         ""
     StrCpy $G_ModelViewerVer   ""
+    StrCpy $G_MediaPlayerVer   ""
 
     ; Runtime is RO so its checkbox state can't be unset; still record
     ; install state to skip a redundant /S re-run.
@@ -479,6 +516,14 @@ Function .onInit
         !insertmacro SelectSection ${SecModelViewer}
     ${EndIf}
 
+    ; Media player demo — default-checked. Pre-checked when already installed.
+    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMediaPlayer" "UninstallString"
+    ${If} $0 != ""
+        StrCpy $G_MediaPlayerInstalled 1
+        ReadRegStr $G_MediaPlayerVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMediaPlayer" "DisplayVersion"
+        !insertmacro SelectSection ${SecMediaPlayer}
+    ${EndIf}
+
     ; Leia — probe SR Platform install path before deciding default.
     ; The SR Platform installer puts core DLLs under one of these dirs
     ; (current "LeiaSR" branding + legacy "Simulated Reality" branding,
@@ -517,6 +562,7 @@ LangString DESC_SecMcp     ${LANG_ENGLISH} "Claude / AI control adapter for Disp
 LangString DESC_SecLeia    ${LANG_ENGLISH} "Display processor for Leia SR 3D monitors. Auto-selected when SR Platform is detected."
 LangString DESC_SecGauss   ${LANG_ENGLISH} "Sample 3D scene viewer (Gaussian splatting renderer). Standalone DisplayXR app."
 LangString DESC_SecModelViewer ${LANG_ENGLISH} "glTF 2.0 PBR model viewer (.glb/.gltf). Standalone DisplayXR app."
+LangString DESC_SecMediaPlayer ${LANG_ENGLISH} "Stereo 3D photo/video media player. Standalone DisplayXR app."
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
     !insertmacro MUI_DESCRIPTION_TEXT ${SecRuntime} $(DESC_SecRuntime)
@@ -525,6 +571,7 @@ LangString DESC_SecModelViewer ${LANG_ENGLISH} "glTF 2.0 PBR model viewer (.glb/
     !insertmacro MUI_DESCRIPTION_TEXT ${SecLeia}    $(DESC_SecLeia)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecGauss}   $(DESC_SecGauss)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecModelViewer} $(DESC_SecModelViewer)
+    !insertmacro MUI_DESCRIPTION_TEXT ${SecMediaPlayer} $(DESC_SecMediaPlayer)
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 
@@ -533,7 +580,7 @@ LangString DESC_SecModelViewer ${LANG_ENGLISH} "glTF 2.0 PBR model viewer (.glb/
 ;--------------------------------
 ;
 ; Walk each child's UninstallString in reverse install order
-; (ModelViewer → Gauss → MCP → Leia → Shell → Runtime). Runtime last so its
+; (MediaPlayer → ModelViewer → Gauss → MCP → Leia → Shell → Runtime). Runtime last so its
 ; DeleteRegKey /ifempty Software\DisplayXR cleanup catches any orphan
 ; subkeys (per PR DisplayXR/displayxr-runtime#291 fix #4). The chain
 ; gracefully skips any child whose ARP key is absent — covers
@@ -541,6 +588,14 @@ LangString DESC_SecModelViewer ${LANG_ENGLISH} "glTF 2.0 PBR model viewer (.glb/
 
 Section "Uninstall"
     Var /GLOBAL ChildUninstall
+
+    ; -- Stereo Media Player --
+    ClearErrors
+    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMediaPlayer" "UninstallString"
+    ${If} $ChildUninstall != ""
+        DetailPrint "Uninstalling Stereo Media Player..."
+        ExecWait '$ChildUninstall /S' $0
+    ${EndIf}
 
     ; -- 3D Model Viewer --
     ClearErrors

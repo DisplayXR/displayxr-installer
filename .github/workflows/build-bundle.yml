@@ -44,6 +44,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Assert every versions.json component is chained by the bundle
+        shell: pwsh
+        run: ./scripts/check_bundle_coverage.ps1
+
       - name: Install NSIS
         shell: pwsh
         run: |
