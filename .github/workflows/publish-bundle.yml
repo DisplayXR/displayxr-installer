@@ -29,7 +29,7 @@ jobs:
   assert-versions-in-sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Compare against displayxr-runtime/versions.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -50,7 +50,7 @@ jobs:
     needs: assert-versions-in-sync
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install jq
         run: brew install jq
@@ -60,7 +60,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/build-bundle.sh --version "${{ inputs.tag }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: DisplayXRBundle-macOS
           path: _out/DisplayXRBundle-*.pkg
@@ -70,7 +70,7 @@ jobs:
     needs: assert-versions-in-sync
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install NSIS
         shell: pwsh
@@ -86,7 +86,7 @@ jobs:
         shell: cmd
         run: scripts\build-bundle.bat --version "${{ inputs.tag }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: DisplayXRBundle-Windows
           path: _out\DisplayXRBundle-*.exe
@@ -102,9 +102,9 @@ jobs:
       # config *file path*, which would break `rclone copy`.
       RCLONE_CONFIG_CONTENTS: ${{ secrets.RCLONE_CONFIG }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: _out
           merge-multiple: true
@@ -113,7 +113,7 @@ jobs:
         run: ls -lh _out/
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.tag }}
           name: DisplayXR ${{ inputs.tag }}

@@ -22,7 +22,7 @@ jobs:
   build-macos:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install jq
         run: brew install jq
@@ -32,7 +32,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/build-bundle.sh --version "v0.0.0-ci.${{ github.run_number }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: DisplayXRBundle-macOS-ci
           path: _out/DisplayXRBundle-*.pkg
@@ -42,7 +42,7 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Assert every versions.json component is chained by the bundle
         shell: pwsh
@@ -62,7 +62,7 @@ jobs:
         shell: cmd
         run: scripts\build-bundle.bat --version "v0.0.0-ci.${{ github.run_number }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: DisplayXRBundle-Windows-ci
           path: _out\DisplayXRBundle-*.exe
