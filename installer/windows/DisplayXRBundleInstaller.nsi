@@ -23,7 +23,6 @@
 ;   MODELVIEWER_EXE  filename of staged 3D model viewer demo installer
 ;   MEDIAPLAYER_EXE  filename of staged stereo media player demo installer
 ;   AVATAR_EXE       filename of staged 3D avatar demo installer
-;   EARTHVIEW_EXE    filename of staged EarthView demo installer
 ;   BUNDLE_STAGE     absolute path to dir containing the staged .exe files + LICENSE
 ;   OUTPUT_DIR       absolute path for OutFile
 
@@ -54,9 +53,6 @@
 !ifndef AVATAR_EXE
     !error "AVATAR_EXE not defined"
 !endif
-!ifndef EARTHVIEW_EXE
-    !error "EARTHVIEW_EXE not defined"
-!endif
 ; Bare (no leading 'v') target versions for the version-compare gate (#346),
 ; passed by build-bundle.bat alongside the *_EXE filenames.
 !ifndef RUNTIME_VER
@@ -82,9 +78,6 @@
 !endif
 !ifndef AVATAR_VER
     !error "AVATAR_VER not defined"
-!endif
-!ifndef EARTHVIEW_VER
-    !error "EARTHVIEW_VER not defined"
 !endif
 !ifndef BUNDLE_STAGE
     !error "BUNDLE_STAGE not defined"
@@ -142,7 +135,6 @@ Var G_GaussInstalled
 Var G_ModelViewerInstalled
 Var G_MediaPlayerInstalled
 Var G_AvatarInstalled
-Var G_EarthViewInstalled
 Var G_LeiaProbeHit       ; 1 iff SR Platform DLLs found on disk
 
 ; Installed DisplayVersion per child (from its ARP key), read in .onInit
@@ -155,7 +147,6 @@ Var G_GaussVer
 Var G_ModelViewerVer
 Var G_MediaPlayerVer
 Var G_AvatarVer
-Var G_EarthViewVer
 
 ; Where we cache a copy of the bundle .exe so ARP Modify can re-run it.
 !define BUNDLE_CACHE_DIR  "$APPDATA\DisplayXR\BundleInstaller"
@@ -426,31 +417,6 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ${EndIf}
         ${EndIf}
     SectionEnd
-
-    Section "EarthView" SecEarthView
-        SetOutPath "$INSTDIR"
-        ${If} ${SectionIsSelected} ${SecEarthView}
-            ${If} $G_EarthViewInstalled == 0
-                DetailPrint "Installing EarthView..."
-                File "${BUNDLE_STAGE}\${EARTHVIEW_EXE}"
-                ClearErrors
-                ExecWait '"$INSTDIR\${EARTHVIEW_EXE}" /S' $0
-                ${If} $0 != 0
-                    MessageBox MB_OK|MB_ICONSTOP "EarthView installer exited with code $0. Aborting bundle."
-                    Abort
-                ${EndIf}
-                Delete "$INSTDIR\${EARTHVIEW_EXE}"
-            ${Else}
-                !insertmacro UpgradeOrSkip $G_EarthViewVer "${EARTHVIEW_VER}" "${EARTHVIEW_EXE}" "EarthView" ""
-            ${EndIf}
-        ${ElseIf} $G_EarthViewInstalled == 1
-            DetailPrint "Removing EarthView..."
-            ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXREarthView" "UninstallString"
-            ${If} $1 != ""
-                ExecWait '$1 /S' $0
-            ${EndIf}
-        ${EndIf}
-    SectionEnd
 SectionGroupEnd
 
 ;--------------------------------
@@ -536,7 +502,6 @@ Function .onInit
     StrCpy $G_ModelViewerInstalled 0
     StrCpy $G_MediaPlayerInstalled 0
     StrCpy $G_AvatarInstalled  0
-    StrCpy $G_EarthViewInstalled 0
     StrCpy $G_LeiaProbeHit     0
     StrCpy $G_RuntimeVer       ""
     StrCpy $G_ShellVer         ""
@@ -546,7 +511,6 @@ Function .onInit
     StrCpy $G_ModelViewerVer   ""
     StrCpy $G_MediaPlayerVer   ""
     StrCpy $G_AvatarVer        ""
-    StrCpy $G_EarthViewVer     ""
 
     ; Runtime is RO so its checkbox state can't be unset; still record
     ; install state to skip a redundant /S re-run.
@@ -604,14 +568,6 @@ Function .onInit
         !insertmacro SelectSection ${SecAvatar}
     ${EndIf}
 
-    ; EarthView demo — default-checked. Pre-checked when already installed.
-    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXREarthView" "UninstallString"
-    ${If} $0 != ""
-        StrCpy $G_EarthViewInstalled 1
-        ReadRegStr $G_EarthViewVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXREarthView" "DisplayVersion"
-        !insertmacro SelectSection ${SecEarthView}
-    ${EndIf}
-
     ; Leia — probe SR Platform install path before deciding default.
     ; The SR Platform installer puts core DLLs under one of these dirs
     ; (current "LeiaSR" branding + legacy "Simulated Reality" branding,
@@ -652,7 +608,6 @@ LangString DESC_SecGauss   ${LANG_ENGLISH} "Sample 3D scene viewer (Gaussian spl
 LangString DESC_SecModelViewer ${LANG_ENGLISH} "glTF 2.0 PBR model viewer (.glb/.gltf). Standalone DisplayXR app."
 LangString DESC_SecMediaPlayer ${LANG_ENGLISH} "Stereo 3D photo/video media player. Standalone DisplayXR app."
 LangString DESC_SecAvatar    ${LANG_ENGLISH} "See-through 3D avatar over the live screen. Standalone DisplayXR app."
-LangString DESC_SecEarthView ${LANG_ENGLISH} "3D Tiles globe renderer. Standalone DisplayXR app."
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
     !insertmacro MUI_DESCRIPTION_TEXT ${SecRuntime} $(DESC_SecRuntime)
@@ -663,7 +618,6 @@ LangString DESC_SecEarthView ${LANG_ENGLISH} "3D Tiles globe renderer. Standalon
     !insertmacro MUI_DESCRIPTION_TEXT ${SecModelViewer} $(DESC_SecModelViewer)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecMediaPlayer} $(DESC_SecMediaPlayer)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecAvatar} $(DESC_SecAvatar)
-    !insertmacro MUI_DESCRIPTION_TEXT ${SecEarthView} $(DESC_SecEarthView)
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 
@@ -672,7 +626,7 @@ LangString DESC_SecEarthView ${LANG_ENGLISH} "3D Tiles globe renderer. Standalon
 ;--------------------------------
 ;
 ; Walk each child's UninstallString in reverse install order
-; (EarthView → Avatar → MediaPlayer → ModelViewer → Gauss → MCP → Leia → Shell → Runtime). Runtime last so its
+; (Avatar → MediaPlayer → ModelViewer → Gauss → MCP → Leia → Shell → Runtime). Runtime last so its
 ; DeleteRegKey /ifempty Software\DisplayXR cleanup catches any orphan
 ; subkeys (per PR DisplayXR/displayxr-runtime#291 fix #4). The chain
 ; gracefully skips any child whose ARP key is absent — covers
@@ -680,14 +634,6 @@ LangString DESC_SecEarthView ${LANG_ENGLISH} "3D Tiles globe renderer. Standalon
 
 Section "Uninstall"
     Var /GLOBAL ChildUninstall
-
-    ; -- EarthView --
-    ClearErrors
-    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXREarthView" "UninstallString"
-    ${If} $ChildUninstall != ""
-        DetailPrint "Uninstalling EarthView..."
-        ExecWait '$ChildUninstall /S' $0
-    ${EndIf}
 
     ; -- 3D Avatar --
     ClearErrors
