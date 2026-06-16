@@ -102,6 +102,9 @@ set "COMPONENT_EXE_modelviewer_demo=DisplayXRModelViewerSetup-*.exe"
 set "COMPONENT_REPO_mediaplayer_demo=DisplayXR/displayxr-demo-mediaplayer"
 set "COMPONENT_EXE_mediaplayer_demo=DisplayXRMediaPlayerSetup-*.exe"
 
+set "COMPONENT_REPO_avatar_demo=DisplayXR/displayxr-demo-avatar"
+set "COMPONENT_EXE_avatar_demo=DisplayXRAvatarSetup-*.exe"
+
 :: --- Read pins from versions.json ---
 :: Per PR DisplayXR/displayxr-runtime#291 fix #1: use function-call form
 :: for ConvertFrom-Json, NOT a pipe inside `for /f`. cmd's re-quoting of
@@ -114,6 +117,7 @@ call :read_pin mcp_tools   MCP_TAG
 call :read_pin gauss_demo  GAUSS_TAG
 call :read_pin modelviewer_demo MODELVIEWER_TAG
 call :read_pin mediaplayer_demo MEDIAPLAYER_TAG
+call :read_pin avatar_demo AVATAR_TAG
 
 if "%RUNTIME_TAG%"=="" ( echo ERROR: versions.json missing 'runtime' pin & exit /b 1 )
 if "%SHELL_TAG%"==""   ( echo ERROR: versions.json missing 'shell' pin & exit /b 1 )
@@ -122,6 +126,7 @@ if "%MCP_TAG%"==""     ( echo ERROR: versions.json missing 'mcp_tools' pin & exi
 if "%GAUSS_TAG%"==""   ( echo ERROR: versions.json missing 'gauss_demo' pin & exit /b 1 )
 if "%MODELVIEWER_TAG%"=="" ( echo ERROR: versions.json missing 'modelviewer_demo' pin & exit /b 1 )
 if "%MEDIAPLAYER_TAG%"=="" ( echo ERROR: versions.json missing 'mediaplayer_demo' pin & exit /b 1 )
+if "%AVATAR_TAG%"=="" ( echo ERROR: versions.json missing 'avatar_demo' pin & exit /b 1 )
 
 :: --- Bare versions for the NSI version-compare gate (#346) ---
 :: Strip the leading 'v' from each pin so it matches the 3-part DisplayVersion
@@ -135,6 +140,7 @@ set "MCP_VER=%MCP_TAG%"
 set "GAUSS_VER=%GAUSS_TAG%"
 set "MODELVIEWER_VER=%MODELVIEWER_TAG%"
 set "MEDIAPLAYER_VER=%MEDIAPLAYER_TAG%"
+set "AVATAR_VER=%AVATAR_TAG%"
 if /i "%RUNTIME_VER:~0,1%"=="v" set "RUNTIME_VER=%RUNTIME_VER:~1%"
 if /i "%SHELL_VER:~0,1%"=="v"   set "SHELL_VER=%SHELL_VER:~1%"
 if /i "%LEIA_VER:~0,1%"=="v"    set "LEIA_VER=%LEIA_VER:~1%"
@@ -142,6 +148,7 @@ if /i "%MCP_VER:~0,1%"=="v"     set "MCP_VER=%MCP_VER:~1%"
 if /i "%GAUSS_VER:~0,1%"=="v"   set "GAUSS_VER=%GAUSS_VER:~1%"
 if /i "%MODELVIEWER_VER:~0,1%"=="v" set "MODELVIEWER_VER=%MODELVIEWER_VER:~1%"
 if /i "%MEDIAPLAYER_VER:~0,1%"=="v" set "MEDIAPLAYER_VER=%MEDIAPLAYER_VER:~1%"
+if /i "%AVATAR_VER:~0,1%"=="v" set "AVATAR_VER=%AVATAR_VER:~1%"
 
 echo ==^> DisplayXR bundle build
 echo     bundle:      v%BUNDLE_VERSION%
@@ -152,6 +159,7 @@ echo     mcp_tools:   %MCP_TAG%
 echo     gauss_demo:  %GAUSS_TAG%
 echo     modelviewer: %MODELVIEWER_TAG%
 echo     mediaplayer: %MEDIAPLAYER_TAG%
+echo     avatar:      %AVATAR_TAG%
 
 :: --- Download each component's installer into _stage\<name>\ ---
 call :download_component runtime     %RUNTIME_TAG% || exit /b 1
@@ -161,6 +169,7 @@ call :download_component mcp_tools   %MCP_TAG%     || exit /b 1
 call :download_component gauss_demo  %GAUSS_TAG%   || exit /b 1
 call :download_component modelviewer_demo %MODELVIEWER_TAG% || exit /b 1
 call :download_component mediaplayer_demo %MEDIAPLAYER_TAG% || exit /b 1
+call :download_component avatar_demo %AVATAR_TAG% || exit /b 1
 
 :: --- Capture the actual downloaded filenames (globs may match different builds) ---
 call :find_exe runtime     RUNTIME_EXE_FILE || exit /b 1
@@ -170,6 +179,7 @@ call :find_exe mcp_tools   MCP_EXE_FILE     || exit /b 1
 call :find_exe gauss_demo  GAUSS_EXE_FILE   || exit /b 1
 call :find_exe modelviewer_demo MODELVIEWER_EXE_FILE || exit /b 1
 call :find_exe mediaplayer_demo MEDIAPLAYER_EXE_FILE || exit /b 1
+call :find_exe avatar_demo AVATAR_EXE_FILE || exit /b 1
 
 :: Copy all .exe files into _stage\bundle\ where NSIS expects them.
 set "BUNDLE_STAGE=%STAGE%\bundle"
@@ -181,6 +191,7 @@ copy /Y "%STAGE%\mcp_tools\%MCP_EXE_FILE%"          "%BUNDLE_STAGE%\" >nul || ex
 copy /Y "%STAGE%\gauss_demo\%GAUSS_EXE_FILE%"       "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\modelviewer_demo\%MODELVIEWER_EXE_FILE%" "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\mediaplayer_demo\%MEDIAPLAYER_EXE_FILE%" "%BUNDLE_STAGE%\" >nul || exit /b 1
+copy /Y "%STAGE%\avatar_demo\%AVATAR_EXE_FILE%"     "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%REPO_ROOT%\LICENSE"                       "%BUNDLE_STAGE%\" >nul || exit /b 1
 
 :: --- Invoke makensis ---
@@ -199,6 +210,7 @@ makensis ^
     "/DGAUSS_EXE=%GAUSS_EXE_FILE%" ^
     "/DMODELVIEWER_EXE=%MODELVIEWER_EXE_FILE%" ^
     "/DMEDIAPLAYER_EXE=%MEDIAPLAYER_EXE_FILE%" ^
+    "/DAVATAR_EXE=%AVATAR_EXE_FILE%" ^
     "/DRUNTIME_VER=%RUNTIME_VER%" ^
     "/DSHELL_VER=%SHELL_VER%" ^
     "/DLEIA_VER=%LEIA_VER%" ^
@@ -206,6 +218,7 @@ makensis ^
     "/DGAUSS_VER=%GAUSS_VER%" ^
     "/DMODELVIEWER_VER=%MODELVIEWER_VER%" ^
     "/DMEDIAPLAYER_VER=%MEDIAPLAYER_VER%" ^
+    "/DAVATAR_VER=%AVATAR_VER%" ^
     "/DBUNDLE_STAGE=%BUNDLE_STAGE%" ^
     "/DOUTPUT_DIR=%OUT_DIR%" ^
     "%REPO_ROOT%\installer\windows\DisplayXRBundleInstaller.nsi"

@@ -69,6 +69,7 @@ MCP_TAG="$(jq -r '.mcp_tools' "$REPO_ROOT/versions.json")"
 GAUSS_TAG="$(jq -r '.gauss_demo' "$REPO_ROOT/versions.json")"
 MODELVIEWER_TAG="$(jq -r '.modelviewer_demo' "$REPO_ROOT/versions.json")"
 MEDIAPLAYER_TAG="$(jq -r '.mediaplayer_demo' "$REPO_ROOT/versions.json")"
+AVATAR_TAG="$(jq -r '.avatar_demo' "$REPO_ROOT/versions.json")"
 
 cat <<EOF
 ==> DisplayXR bundle build
@@ -80,6 +81,7 @@ cat <<EOF
     gauss_demo:  $GAUSS_TAG
     modelviewer: $MODELVIEWER_TAG
     mediaplayer: $MEDIAPLAYER_TAG
+    avatar:      $AVATAR_TAG
 EOF
 
 # 2. Walk components; download any with a non-empty macOS asset glob and
@@ -138,6 +140,9 @@ process_component() {
             ;;
         mediaplayer_demo)
             extract_mediaplayer_demo "$expanded"
+            ;;
+        avatar_demo)
+            extract_avatar_demo "$expanded"
             ;;
         shell|leia_plugin|mcp_tools)
             # Future: shell/leia/mcp don't ship macOS .pkg today. When
@@ -247,18 +252,43 @@ extract_mediaplayer_demo() {
 "
 }
 
+# extract_avatar_demo: same shape. Inner component is avatar.pkg
+# (identifier com.displayxr.avatar). User-toggleable (opt-in demo).
+extract_avatar_demo() {
+    local expanded="$1"
+    local comp_dir="$expanded/avatar.pkg"
+    if [[ ! -d "$comp_dir" ]]; then
+        echo "ERROR: avatar.pkg not found inside expanded avatar_demo distribution" >&2
+        echo "       (expected $comp_dir; check that the demo release artifact is a productbuild distribution)" >&2
+        exit 1
+    fi
+    local flat="$COMPONENTS_DIR/avatar_demo.pkg"
+    pkgutil --flatten "$comp_dir" "$flat"
+
+    CHOICE_LINES+="        <line choice=\"avatar_demo\"/>"$'\n'
+    CHOICES+="    <choice id=\"avatar_demo\" visible=\"true\" start_selected=\"true\"
+        title=\"3D Avatar\"
+        description=\"DisplayXR demo: see-through 3D avatar over the live screen for glasses-free 3D displays. Installs to /Applications/3D Avatar.app. Optional.\">
+        <pkg-ref id=\"com.displayxr.avatar\"/>
+    </choice>
+"
+    PKG_REFS+="    <pkg-ref id=\"com.displayxr.avatar\" version=\"${AVATAR_TAG#v}\" onConclusion=\"none\">avatar_demo.pkg</pkg-ref>
+"
+}
+
 process_component runtime     "$RUNTIME_TAG"
 process_component shell       "$SHELL_TAG"
 process_component leia_plugin "$LEIA_TAG"
 process_component mcp_tools   "$MCP_TAG"
-# Demos go after core components in the install UI. All three ship a macOS
-# .pkg (gauss, model viewer, media player). process_component gracefully
+# Demos go after core components in the install UI. All ship a macOS
+# .pkg (gauss, model viewer, media player, avatar). process_component gracefully
 # skips any whose runtime components.sh table has an empty PKG_MACOS glob,
 # so calling it unconditionally is safe and keeps macOS in lockstep with
 # the Windows bundle's demo set.
 process_component gauss_demo       "$GAUSS_TAG"
 process_component modelviewer_demo "$MODELVIEWER_TAG"
 process_component mediaplayer_demo "$MEDIAPLAYER_TAG"
+process_component avatar_demo      "$AVATAR_TAG"
 
 if [[ -z "$CHOICE_LINES" ]]; then
     echo "ERROR: no components produced a macOS .pkg — nothing to bundle" >&2
