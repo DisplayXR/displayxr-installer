@@ -70,6 +70,7 @@ GAUSS_TAG="$(jq -r '.gauss_demo' "$REPO_ROOT/versions.json")"
 MODELVIEWER_TAG="$(jq -r '.modelviewer_demo' "$REPO_ROOT/versions.json")"
 MEDIAPLAYER_TAG="$(jq -r '.mediaplayer_demo' "$REPO_ROOT/versions.json")"
 AVATAR_TAG="$(jq -r '.avatar_demo' "$REPO_ROOT/versions.json")"
+EARTHVIEW_TAG="$(jq -r '.earthview_demo' "$REPO_ROOT/versions.json")"
 
 cat <<EOF
 ==> DisplayXR bundle build
@@ -82,6 +83,7 @@ cat <<EOF
     modelviewer: $MODELVIEWER_TAG
     mediaplayer: $MEDIAPLAYER_TAG
     avatar:      $AVATAR_TAG
+    earthview:   $EARTHVIEW_TAG
 EOF
 
 # 2. Walk components; download any with a non-empty macOS asset glob and
@@ -143,6 +145,9 @@ process_component() {
             ;;
         avatar_demo)
             extract_avatar_demo "$expanded"
+            ;;
+        earthview_demo)
+            extract_earthview_demo "$expanded"
             ;;
         shell|leia_plugin|mcp_tools)
             # Future: shell/leia/mcp don't ship macOS .pkg today. When
@@ -276,6 +281,30 @@ extract_avatar_demo() {
 "
 }
 
+# extract_earthview_demo: same shape. Inner component is earthview.pkg
+# (identifier com.displayxr.earthview). User-toggleable (opt-in demo).
+extract_earthview_demo() {
+    local expanded="$1"
+    local comp_dir="$expanded/earthview.pkg"
+    if [[ ! -d "$comp_dir" ]]; then
+        echo "ERROR: earthview.pkg not found inside expanded earthview_demo distribution" >&2
+        echo "       (expected $comp_dir; check that the demo release artifact is a productbuild distribution)" >&2
+        exit 1
+    fi
+    local flat="$COMPONENTS_DIR/earthview_demo.pkg"
+    pkgutil --flatten "$comp_dir" "$flat"
+
+    CHOICE_LINES+="        <line choice=\"earthview_demo\"/>"$'\n'
+    CHOICES+="    <choice id=\"earthview_demo\" visible=\"true\" start_selected=\"true\"
+        title=\"EarthView\"
+        description=\"DisplayXR demo: streaming 3D city viewer on Google Photorealistic 3D Tiles. Fly the world, or double-click a landmark to inspect and orbit it. Installs to /Applications/EarthView.app. Needs a Google Map Tiles API key. Optional.\">
+        <pkg-ref id=\"com.displayxr.earthview\"/>
+    </choice>
+"
+    PKG_REFS+="    <pkg-ref id=\"com.displayxr.earthview\" version=\"${EARTHVIEW_TAG#v}\" onConclusion=\"none\">earthview_demo.pkg</pkg-ref>
+"
+}
+
 process_component runtime     "$RUNTIME_TAG"
 process_component shell       "$SHELL_TAG"
 process_component leia_plugin "$LEIA_TAG"
@@ -289,6 +318,7 @@ process_component gauss_demo       "$GAUSS_TAG"
 process_component modelviewer_demo "$MODELVIEWER_TAG"
 process_component mediaplayer_demo "$MEDIAPLAYER_TAG"
 process_component avatar_demo      "$AVATAR_TAG"
+process_component earthview_demo   "$EARTHVIEW_TAG"
 
 if [[ -z "$CHOICE_LINES" ]]; then
     echo "ERROR: no components produced a macOS .pkg — nothing to bundle" >&2
