@@ -137,6 +137,17 @@ jobs:
           sudo cp rclone-*-linux-amd64/rclone /usr/local/bin/
           rclone --version
 
+      # RENEWING THE EXPIRED ONEDRIVE TOKEN (when this step's upload fails with
+      # `invalid_grant: maybe token expired?`): on a machine with the `onedrive:`
+      # rclone remote, run `rclone config reconnect onedrive:` and sign in.
+      # GOTCHA: reconnect RE-RUNS drive selection and may silently switch to a
+      # different drive. Before pushing the refreshed config back into the
+      # RCLONE_CONFIG secret, confirm the remote still points at the team
+      # SharePoint library, NOT your personal OneDrive:
+      #   drive_id   = b!zEagTudx1U2Q_96AptYuE7LwY6TuenBIgA8dwW5Llo_wRfPMIOCRTbgSnwf1KBig
+      #   drive_type = documentLibrary
+      # Restore those two fields if reconnect changed them, then:
+      #   gh secret set RCLONE_CONFIG --repo DisplayXR/displayxr-installer < ~/.config/rclone/rclone.conf
       - name: Setup rclone config
         if: env.RCLONE_CONFIG_CONTENTS != ''
         run: |
