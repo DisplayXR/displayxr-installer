@@ -173,7 +173,7 @@ Var G_EarthViewVer
 ;
 ; ExtraArgs: extra switches for the child's silent run — "/NOSTART" for
 ; children that would otherwise launch displayxr-service mid-chain
-; (runtime, leia; #461 on the runtime repo), "" for the rest. Older child
+; (runtime, leia-plugin; #461 on the runtime repo), "" for the rest. Older child
 ; installers ignore unknown switches, so passing it is always safe.
 ;
 ; Args: InstalledVer (a $Var)  TargetVer (literal)  ExeName  Human  ExtraArgs
@@ -212,8 +212,8 @@ Var G_EarthViewVer
 ; #461 (runtime repo): stop DisplayXR processes ONCE before any child
 ; installer runs. A running displayxr-service has plug-in DLLs mapped;
 ; NSIS /S installs skip locked files SILENTLY (exit 0), which is how the
-; v0.14.0 bundle left a stale Leia DLL on disk under a fresh registry
-; Version. Covers every chain shape — including "leia-only upgrade",
+; v0.14.0 bundle left a stale Leia SR DLL on disk under a fresh registry
+; Version. Covers every chain shape — including "Leia-SR-only upgrade",
 ; where the logon-started service would otherwise hold the DLL. The
 ; service is restarted exactly once at the end (-FinalizeBundleArp,
 ; #342); children are invoked with /NOSTART so none of them brings it
@@ -492,7 +492,7 @@ Section "-FinalizeBundleArp"
     ; AFTER every component (esp. the Leia plug-in) has registered its
     ; HKLM\Software\DisplayXR\DisplayProcessors\* manifest. The runtime
     ; installer starts the service at the end of its OWN section, which
-    ; runs before the later Leia section — so without this, a fresh
+    ; runs before the later Leia SR section — so without this, a fresh
     ; install's service binds the sim-display fallback (ProbeOrder 200)
     ; instead of leia-sr (50) and shows no weave until the next restart.
     ; -----------------------------------------------------------------
@@ -514,7 +514,7 @@ SectionEnd
 ;--------------------------------
 ; .onInit — SetRegView 64 (so HKLM\Software\... isn't redirected to
 ; WOW6432Node, which was bug #2 in PR #1), then read each child's
-; current install state and pre-check the matching section. For Leia
+; current install state and pre-check the matching section. For Leia SR
 ; on a fresh-install machine, also probe for SR Platform DLLs to
 ; decide whether to default-check the box.
 ;
@@ -612,11 +612,11 @@ Function .onInit
         !insertmacro SelectSection ${SecEarthView}
     ${EndIf}
 
-    ; Leia — probe SR Platform install path before deciding default.
+    ; Leia SR — probe SR Platform install path before deciding default.
     ; The SR Platform installer puts core DLLs under one of these dirs
     ; (current "LeiaSR" branding + legacy "Simulated Reality" branding,
     ; both seen in the field). Either present → user has the platform
-    ; layer + likely the hardware, so default-check Leia.
+    ; layer + likely the hardware, so default-check Leia SR.
     ${If} ${FileExists} "$PROGRAMFILES64\LeiaSR\Platform\bin\*.dll"
         StrCpy $G_LeiaProbeHit 1
     ${ElseIf} ${FileExists} "$PROGRAMFILES32\Simulated Reality\Platform\*.dll"
@@ -672,7 +672,7 @@ LangString DESC_SecEarthView ${LANG_ENGLISH} "Streaming 3D city viewer on Google
 ;--------------------------------
 ;
 ; Walk each child's UninstallString in reverse install order
-; (EarthView → Avatar → MediaPlayer → ModelViewer → Gauss → MCP → Leia → Shell → Runtime). Runtime last so its
+; (EarthView → Avatar → MediaPlayer → ModelViewer → Gauss → MCP → Leia SR → Shell → Runtime). Runtime last so its
 ; DeleteRegKey /ifempty Software\DisplayXR cleanup catches any orphan
 ; subkeys (per PR DisplayXR/displayxr-runtime#291 fix #4). The chain
 ; gracefully skips any child whose ARP key is absent — covers
