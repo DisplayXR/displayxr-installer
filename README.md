@@ -77,4 +77,4 @@ Not auto-triggered on component releases — that would be brittle (e.g., a runt
 
 ## License
 
-[Boost Software License 1.0](LICENSE) — same as the runtime.
+[Apache-2.0](LICENSE).

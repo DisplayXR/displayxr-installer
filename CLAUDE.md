@@ -106,7 +106,7 @@ Full design rationale:
 - **PR title under 70 chars.** Detail goes in the body.
 - **Co-Authored-By trailer for Claude commits.**
 - **No -i flags on git** (no interactive rebase/add).
-- **License:** Boost Software License 1.0 — same as runtime + shell + plugins.
+- **License:** Apache-2.0 (the runtime stays BSL-1.0 as a Monado-aligned fork).
 
 ## Things to be careful about
 
