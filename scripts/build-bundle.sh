@@ -150,7 +150,7 @@ process_component() {
             extract_earthview_demo "$expanded"
             ;;
         shell|leia_plugin|mcp_tools)
-            # Future: shell/leia/mcp don't ship macOS .pkg today. When
+            # Future: shell/leia-plugin/mcp don't ship macOS .pkg today. When
             # they do, add extract_$name like extract_runtime — most
             # will look the same (one component .pkg inside, one
             # <choice>/<pkg-ref> pair).
