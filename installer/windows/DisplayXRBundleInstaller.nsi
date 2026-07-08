@@ -749,6 +749,37 @@ Section "Uninstall"
         ExecWait '$ChildUninstall /S' $0
     ${EndIf}
 
+    ; -- Standalone Unity test/sample apps --
+    ; These are NOT chained by the bundle; they are installed out-of-band
+    ; from the displayxr-unity-test* repos, each registering
+    ; Software\DisplayXR\Unity\<name> with an InstallPath and its own
+    ; Uninstall.exe underneath. Enumerate the subkeys so every present or
+    ; future variant (Test, Test2DUI, TestHDRP, TestTransparent, …) is
+    ; removed without hardcoding names — otherwise a bundle uninstall
+    ; strands them under $PROGRAMFILES64\DisplayXR\Unity and blocks the
+    ; DeleteRegKey /ifempty Software\DisplayXR cleanup below. Uninstall
+    ; them before the runtime (they depend on it). Always enumerate index
+    ; 0 and force-delete the component key each pass so the loop makes
+    ; forward progress even if a child's async /S uninstall lags releasing
+    ; the key; $R1 is a hard cap against a stuck key.
+    StrCpy $R1 0
+    unity_loop:
+        EnumRegKey $R0 HKLM "Software\DisplayXR\Unity" 0
+        StrCmp $R0 "" unity_done
+        ClearErrors
+        ReadRegStr $R2 HKLM "Software\DisplayXR\Unity\$R0" "InstallPath"
+        ${If} $R2 != ""
+        ${AndIf} ${FileExists} "$R2\Uninstall.exe"
+            DetailPrint "Uninstalling Unity test app '$R0'..."
+            ExecWait '"$R2\Uninstall.exe" /S' $0
+        ${EndIf}
+        DeleteRegKey HKLM "Software\DisplayXR\Unity\$R0"
+        IntOp $R1 $R1 + 1
+        IntCmp $R1 64 unity_done unity_loop unity_done
+    unity_done:
+    RMDir "$PROGRAMFILES64\DisplayXR\Unity"
+    DeleteRegKey /ifempty HKLM "Software\DisplayXR\Unity"
+
     ; -- Runtime --
     ClearErrors
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXR" "UninstallString"
