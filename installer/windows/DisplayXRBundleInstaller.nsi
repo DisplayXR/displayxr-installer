@@ -176,6 +176,38 @@ Var G_EarthViewVer
 !define BUNDLE_UNINST_FILE "${BUNDLE_CACHE_DIR}\Uninstall-DisplayXRBundle.exe"
 
 ;--------------------------------
+; PurgeBundleCaches — delete cached DisplayXRBundle-*.exe copies in
+; ${BUNDLE_CACHE_DIR}, keeping the one named ${KEEP} (pass "" to purge
+; all). Without this the cache dir grows one full installer (~55-95 MB)
+; per version forever — only the current version's copy was ever
+; removed on uninstall, so every prior bundle leaked (#25).
+;
+; KEEP must be a bare filename, not a path — FindFirst yields names.
+; Runs AFTER the current version is cached (install) so ${KEEP} exists
+; to be kept. On uninstall KEEP="" removes every copy, which also lets
+; the following RMDir succeed instead of tripping on leftovers.
+;
+; UNIQ makes the loop labels unique per expansion. $R0/$R1 are saved
+; and restored so the macro is safe to drop into any section.
+;--------------------------------
+!macro PurgeBundleCaches KEEP UNIQ
+    Push $R0
+    Push $R1
+    FindFirst $R0 $R1 "${BUNDLE_CACHE_DIR}\DisplayXRBundle-*.exe"
+  purge_loop_${UNIQ}:
+    StrCmp $R1 "" purge_done_${UNIQ}
+    StrCmp $R1 "${KEEP}" purge_next_${UNIQ} 0
+    Delete "${BUNDLE_CACHE_DIR}\$R1"
+  purge_next_${UNIQ}:
+    FindNext $R0 $R1
+    Goto purge_loop_${UNIQ}
+  purge_done_${UNIQ}:
+    FindClose $R0
+    Pop $R1
+    Pop $R0
+!macroend
+
+;--------------------------------
 ; UpgradeOrSkip — for an ALREADY-installed component, re-run its staged
 ; sub-installer /S only when the bundle's pinned target version is strictly
 ; newer than what's installed (#346). Never downgrades.
@@ -477,6 +509,10 @@ Section "-FinalizeBundleArp"
     ; re-launch it after the user has discarded the original download.
     CreateDirectory "${BUNDLE_CACHE_DIR}"
     CopyFiles /SILENT "$EXEPATH" "${BUNDLE_CACHE_FILE}"
+
+    ; #25: now that this version is cached, drop every OLDER cached bundle
+    ; installer so the dir doesn't accumulate one per version forever.
+    !insertmacro PurgeBundleCaches "DisplayXRBundle-${BUNDLE_VERSION}.exe" INSTALL
 
     ; Uninstaller goes to the stable cache dir, NOT $INSTDIR — $INSTDIR is
     ; $TEMP and gets swept, which orphans the ARP entry below.
@@ -806,9 +842,11 @@ Section "Uninstall"
         ExecWait '$ChildUninstall /S' $0
     ${EndIf}
 
-    ; Tear down our own ARP entry + cached bundle .exe.
+    ; Tear down our own ARP entry + every cached bundle .exe.
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle"
-    Delete "${BUNDLE_CACHE_FILE}"
+    ; #25: purge ALL cached bundle installers (KEEP=""), not just the current
+    ; version — otherwise older copies survive and block the RMDir below.
+    !insertmacro PurgeBundleCaches "" UNINSTALL
     ; We are RUNNING from ${BUNDLE_UNINST_FILE}, so Windows holds the file
     ; locked and a plain Delete silently no-ops. /REBOOTOK queues both the
     ; .exe and its now-empty dir for removal on next boot. The ARP key is
