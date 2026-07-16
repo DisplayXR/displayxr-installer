@@ -96,10 +96,18 @@
 Name        "DisplayXR ${BUNDLE_VERSION}"
 OutFile     "${OUTPUT_DIR}\DisplayXRBundle-${BUNDLE_VERSION}.exe"
 RequestExecutionLevel admin
-; The bundle itself doesn't install files long-term to $INSTDIR;
-; child installers go to their own Program Files locations. We DO copy
-; the bundle .exe itself to $APPDATA so the ARP Modify button
-; has something stable to re-launch (see SecFinalize below).
+; $INSTDIR is PURE SCRATCH: each section extracts its staged child .exe
+; here, runs it, and deletes it again immediately — child installers put
+; their real payload in their own Program Files locations. $TEMP is the
+; right home for that transient churn.
+;
+; Nothing that must outlive the install may live here: $TEMP is wiped by
+; Storage Sense / Disk Cleanup. Both survivors go to ${BUNDLE_CACHE_DIR}
+; (a stable ProgramData path) instead — the cached bundle .exe behind the
+; ARP Modify button, and the uninstaller itself. Parking the uninstaller
+; in $TEMP orphaned the ARP entry as soon as Windows swept the dir: the
+; "DisplayXR <ver>" row survived pointing at a deleted .exe, leaving the
+; stack un-uninstallable and blocking clean upgrades.
 InstallDir  "$TEMP\DisplayXRBundle-${BUNDLE_VERSION}"
 ShowInstDetails show
 ShowUninstDetails show
@@ -157,9 +165,15 @@ Var G_MediaPlayerVer
 Var G_AvatarVer
 Var G_EarthViewVer
 
-; Where we cache a copy of the bundle .exe so ARP Modify can re-run it.
-!define BUNDLE_CACHE_DIR  "$APPDATA\DisplayXR\BundleInstaller"
-!define BUNDLE_CACHE_FILE "${BUNDLE_CACHE_DIR}\DisplayXRBundle-${BUNDLE_VERSION}.exe"
+; Stable home for everything that must outlive the install. Under
+; SetShellVarContext all (.onInit / un.onInit) $APPDATA is C:\ProgramData,
+; which matches this installer's per-machine (HKLM) scope and is never
+; swept the way $TEMP is.
+!define BUNDLE_CACHE_DIR   "$APPDATA\DisplayXR\BundleInstaller"
+; A copy of the bundle .exe, so ARP Modify can re-run it.
+!define BUNDLE_CACHE_FILE  "${BUNDLE_CACHE_DIR}\DisplayXRBundle-${BUNDLE_VERSION}.exe"
+; The bundle's own uninstaller. Must NOT live in $INSTDIR ($TEMP).
+!define BUNDLE_UNINST_FILE "${BUNDLE_CACHE_DIR}\Uninstall-DisplayXRBundle.exe"
 
 ;--------------------------------
 ; UpgradeOrSkip — for an ALREADY-installed component, re-run its staged
@@ -464,7 +478,9 @@ Section "-FinalizeBundleArp"
     CreateDirectory "${BUNDLE_CACHE_DIR}"
     CopyFiles /SILENT "$EXEPATH" "${BUNDLE_CACHE_FILE}"
 
-    WriteUninstaller "$INSTDIR\Uninstall-DisplayXRBundle.exe"
+    ; Uninstaller goes to the stable cache dir, NOT $INSTDIR — $INSTDIR is
+    ; $TEMP and gets swept, which orphans the ARP entry below.
+    WriteUninstaller "${BUNDLE_UNINST_FILE}"
 
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
         "DisplayName"          "DisplayXR ${BUNDLE_VERSION}"
@@ -473,9 +489,11 @@ Section "-FinalizeBundleArp"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
         "DisplayVersion"       "${BUNDLE_VERSION}"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
-        "UninstallString"      "$INSTDIR\Uninstall-DisplayXRBundle.exe"
+        "UninstallString"      '"${BUNDLE_UNINST_FILE}"'
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
-        "QuietUninstallString" '"$INSTDIR\Uninstall-DisplayXRBundle.exe" /S'
+        "QuietUninstallString" '"${BUNDLE_UNINST_FILE}" /S'
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
+        "InstallLocation"      "${BUNDLE_CACHE_DIR}"
     ; ModifyPath re-launches the cached bundle .exe so the user can
     ; re-show the Components page and add/remove components without
     ; uninstalling the whole stack. NoModify=0 makes Windows surface
@@ -791,14 +809,22 @@ Section "Uninstall"
     ; Tear down our own ARP entry + cached bundle .exe.
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle"
     Delete "${BUNDLE_CACHE_FILE}"
-    RMDir "${BUNDLE_CACHE_DIR}"
-    RMDir "$APPDATA\DisplayXR"
+    ; We are RUNNING from ${BUNDLE_UNINST_FILE}, so Windows holds the file
+    ; locked and a plain Delete silently no-ops. /REBOOTOK queues both the
+    ; .exe and its now-empty dir for removal on next boot. The ARP key is
+    ; already gone above, so the lingering .exe is inert either way.
+    Delete /REBOOTOK "${BUNDLE_UNINST_FILE}"
+    RMDir /REBOOTOK "${BUNDLE_CACHE_DIR}"
+    RMDir /REBOOTOK "$APPDATA\DisplayXR"
 
     ; Catch any orphan parent key the runtime's own /ifempty cleanup
     ; missed. Defensive — runtime already does this, but harmless if
     ; the key is gone or non-empty.
     DeleteRegKey /ifempty HKLM "Software\DisplayXR"
 
-    Delete "$INSTDIR\Uninstall-DisplayXRBundle.exe"
-    RMDir "$INSTDIR"
+    ; NOTE: no $INSTDIR cleanup here. In an uninstaller NSIS points $INSTDIR
+    ; at the uninstaller's OWN dir — now ${BUNDLE_CACHE_DIR}, already swept
+    ; above — not the $TEMP staging dir it meant back when the uninstaller
+    ; lived there. The install-time staging dir is emptied by each section
+    ; and self-cleans with $TEMP.
 SectionEnd

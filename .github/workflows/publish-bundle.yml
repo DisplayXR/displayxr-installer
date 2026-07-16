@@ -124,6 +124,48 @@ jobs:
             _out/DisplayXRBundle-*.exe
           fail_on_unmatched_files: true
 
+      # ---------------------------------------------------------------------
+      # THIS WORKFLOW CANNOT SIGN. The EV cert lives on the signing provider's
+      # self-hosted runner ($DXR_SIGN_REPO), so the bundle .exe is signed
+      # post-hoc by the /installer-release skill (Phase 4.5), which re-uploads
+      # the signed asset over the one published above.
+      #
+      # A raw `gh workflow run publish-bundle` therefore ships an UNSIGNED
+      # bundle, and the run still goes green — exactly how v2.0.3 reached
+      # users with a SmartScreen warning. This step makes that outcome loud
+      # instead of silent. It is deliberately ADVISORY: signing never gates
+      # publishing (an unsigned fallback release is still a valid outcome),
+      # so it always exits 0 and never turns the run red.
+      # ---------------------------------------------------------------------
+      - name: Warn if the published bundle is unsigned
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq osslsigncode
+          exe=$(ls _out/DisplayXRBundle-*.exe | head -n1)
+          out=$(osslsigncode verify -in "$exe" 2>&1 || true)
+          # Chain-trust failures are expected here (no MS root on the runner);
+          # we only care whether a signature is present at all.
+          if printf '%s' "$out" | grep -qi 'No signature found'; then
+            echo "::warning title=Bundle published UNSIGNED::$(basename "$exe") has no Authenticode signature. Users will see a SmartScreen warning. Run /installer-release ${{ inputs.tag }} to sign and re-upload."
+            {
+              echo "### ⚠️ Bundle published UNSIGNED"
+              echo
+              echo "\`$(basename "$exe")\` carries no Authenticode signature — users will hit SmartScreen."
+              echo
+              echo "This workflow cannot sign (the cert is on the signing provider's runner)."
+              echo "To fix, run: \`/installer-release ${{ inputs.tag }}\` — it signs the .exe and re-uploads it over this asset."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            signer=$(printf '%s' "$out" | grep -i 'Signer.*:' | head -n1 || true)
+            echo "Bundle is signed. $signer"
+            {
+              echo "### ✅ Bundle is signed"
+              echo
+              echo "\`$(basename "$exe")\` carries an Authenticode signature."
+              [ -n "$signer" ] && echo "\`$signer\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       # Mirror the Windows bundle installer to OneDrive on release. This is
       # the single OneDrive upload point for the whole stack — the runtime
       # repo no longer pushes per-CI build artifacts there. Gated on the
