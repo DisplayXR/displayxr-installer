@@ -1,0 +1,99 @@
+# Upload the SIGNED bundle installer to OneDrive.
+#
+# Split out of publish-bundle.yml (2026-07-17): that workflow uploaded the
+# bundle to OneDrive inside its `release` job — i.e. BEFORE the post-hoc
+# signing done by the /installer-release skill (Phase 4.5). So OneDrive always
+# got the UNSIGNED bundle even when the GitHub release ended up signed.
+#
+# This workflow is dispatched by the /installer-release skill AFTER it has
+# signed the .exe and re-uploaded it over the release asset. It downloads that
+# (now signed) asset from the GitHub release and pushes it to OneDrive — so the
+# OneDrive copy matches the signed GitHub release byte-for-byte.
+#
+# rclone creds stay in CI (RCLONE_CONFIG secret); this box needs no rclone.
+name: Upload bundle to OneDrive
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Bundle release tag whose signed DisplayXRBundle-*.exe to mirror (e.g. v2.0.6)'
+        required: true
+
+permissions:
+  contents: read   # download the release asset
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    env:
+      # NOT named RCLONE_CONFIG — that reserved var points at a config *file
+      # path* and would break `rclone copy`.
+      RCLONE_CONFIG_CONTENTS: ${{ secrets.RCLONE_CONFIG }}
+    steps:
+      - name: Guard — RCLONE_CONFIG present
+        run: |
+          if [ -z "$RCLONE_CONFIG_CONTENTS" ]; then
+            echo "::error title=RCLONE_CONFIG unset::Cannot upload to OneDrive without the RCLONE_CONFIG secret."
+            exit 1
+          fi
+
+      - name: Download the signed bundle installer from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p _out
+          gh release download "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern 'DisplayXRBundle-*.exe' \
+            --dir _out
+          exe=$(ls _out/DisplayXRBundle-*.exe | head -n1)
+          [ -n "$exe" ] || { echo "::error::No DisplayXRBundle-*.exe on release ${{ inputs.tag }}"; exit 1; }
+          echo "Downloaded $(basename "$exe")"
+
+      # Fail LOUD here (unlike the old advisory step) — if this workflow was
+      # dispatched, the intent is a signed OneDrive copy. A missing signature
+      # means the caller ran it before signing; better to stop than mirror
+      # an unsigned bundle silently.
+      - name: Verify the downloaded bundle is signed
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq osslsigncode
+          exe=$(ls _out/DisplayXRBundle-*.exe | head -n1)
+          out=$(osslsigncode verify -in "$exe" 2>&1 || true)
+          # Chain-trust failures are expected (no MS root on the runner); we
+          # only assert a signature is PRESENT.
+          if printf '%s' "$out" | grep -qi 'No signature found'; then
+            echo "::error title=Refusing to mirror an UNSIGNED bundle::$(basename "$exe") has no Authenticode signature. Sign it first (/installer-release ${{ inputs.tag }}), then re-run this."
+            exit 1
+          fi
+          echo "Bundle is signed — proceeding to OneDrive upload."
+
+      - name: Install rclone
+        run: |
+          curl -O https://downloads.rclone.org/rclone-current-linux-amd64.zip
+          unzip rclone-current-linux-amd64.zip
+          sudo cp rclone-*-linux-amd64/rclone /usr/local/bin/
+          rclone --version
+
+      # RENEWING THE EXPIRED ONEDRIVE TOKEN (upload fails with
+      # `invalid_grant: maybe token expired?`): on a machine with the `onedrive:`
+      # rclone remote, run `rclone config reconnect onedrive:` and sign in.
+      # GOTCHA: reconnect RE-RUNS drive selection and may silently switch drives.
+      # Before pushing the refreshed config into the RCLONE_CONFIG secret, confirm
+      # the remote still points at the team SharePoint library, NOT personal OneDrive:
+      #   drive_id   = b!zEagTudx1U2Q_96AptYuE7LwY6TuenBIgA8dwW5Llo_wRfPMIOCRTbgSnwf1KBig
+      #   drive_type = documentLibrary
+      #   gh secret set RCLONE_CONFIG --repo DisplayXR/displayxr-installer < ~/.config/rclone/rclone.conf
+      - name: Setup rclone config
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONFIG_CONTENTS" > ~/.config/rclone/rclone.conf
+
+      - name: Upload signed bundle installer to OneDrive
+        run: |
+          destPath="SANDBOX/RUNTIMES + SDK + PLUGINS/OpenXR"
+          installer=$(ls _out/DisplayXRBundle-*.exe | head -n1)
+          echo "Uploading $(basename "$installer") to OneDrive: $destPath"
+          rclone copy "$installer" "onedrive:$destPath" --progress
+          echo "Upload complete!"

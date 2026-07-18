@@ -95,12 +95,6 @@ jobs:
   release:
     needs: [build-macos, build-windows]
     runs-on: ubuntu-latest
-    env:
-      # Mapped to a job-level env so the OneDrive steps can gate on its
-      # presence (the `secrets` context isn't usable in step `if:`). NOT
-      # named RCLONE_CONFIG — that's a reserved rclone var pointing at a
-      # config *file path*, which would break `rclone copy`.
-      RCLONE_CONFIG_CONTENTS: ${{ secrets.RCLONE_CONFIG }}
     steps:
       - uses: actions/checkout@v5
 
@@ -166,41 +160,9 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # Mirror the Windows bundle installer to OneDrive on release. This is
-      # the single OneDrive upload point for the whole stack — the runtime
-      # repo no longer pushes per-CI build artifacts there. Gated on the
-      # RCLONE_CONFIG secret being present (skips cleanly on a fork or if the
-      # secret is unset) so the release itself never fails on its absence.
-      - name: Install rclone
-        if: env.RCLONE_CONFIG_CONTENTS != ''
-        run: |
-          curl -O https://downloads.rclone.org/rclone-current-linux-amd64.zip
-          unzip rclone-current-linux-amd64.zip
-          sudo cp rclone-*-linux-amd64/rclone /usr/local/bin/
-          rclone --version
-
-      # RENEWING THE EXPIRED ONEDRIVE TOKEN (when this step's upload fails with
-      # `invalid_grant: maybe token expired?`): on a machine with the `onedrive:`
-      # rclone remote, run `rclone config reconnect onedrive:` and sign in.
-      # GOTCHA: reconnect RE-RUNS drive selection and may silently switch to a
-      # different drive. Before pushing the refreshed config back into the
-      # RCLONE_CONFIG secret, confirm the remote still points at the team
-      # SharePoint library, NOT your personal OneDrive:
-      #   drive_id   = b!zEagTudx1U2Q_96AptYuE7LwY6TuenBIgA8dwW5Llo_wRfPMIOCRTbgSnwf1KBig
-      #   drive_type = documentLibrary
-      # Restore those two fields if reconnect changed them, then:
-      #   gh secret set RCLONE_CONFIG --repo DisplayXR/displayxr-installer < ~/.config/rclone/rclone.conf
-      - name: Setup rclone config
-        if: env.RCLONE_CONFIG_CONTENTS != ''
-        run: |
-          mkdir -p ~/.config/rclone
-          printf '%s\n' "$RCLONE_CONFIG_CONTENTS" > ~/.config/rclone/rclone.conf
-
-      - name: Upload Windows bundle installer to OneDrive
-        if: env.RCLONE_CONFIG_CONTENTS != ''
-        run: |
-          destPath="SANDBOX/RUNTIMES + SDK + PLUGINS/OpenXR"
-          installer=$(ls _out/DisplayXRBundle-*.exe | head -n1)
-          echo "Uploading $(basename "$installer") to OneDrive: $destPath"
-          rclone copy "$installer" "onedrive:$destPath" --progress
-          echo "Upload complete!"
+      # NOTE: the OneDrive upload used to live HERE, but this job runs BEFORE the
+      # post-hoc signing (Phase 4.5 of /installer-release), so it always mirrored
+      # the UNSIGNED bundle. It now lives in its own `upload-bundle-onedrive.yml`
+      # (workflow_dispatch), which the /installer-release skill fires AFTER it has
+      # signed the .exe and re-uploaded it over the release asset — so OneDrive
+      # always gets the signed bundle. Do NOT re-add an upload step here.
