@@ -121,6 +121,12 @@ ShowUninstDetails show
 
 !define MUI_ABORTWARNING
 
+; Installer / wizard / uninstaller icon — the DisplayXR app tile (bundled
+; alongside this .nsi; __FILEDIR__ resolves at makensis time). Without this
+; the bundle .exe + its uninstaller show the generic NSIS icon.
+!define MUI_ICON   "${__FILEDIR__}\assets\displayxr_app.ico"
+!define MUI_UNICON "${__FILEDIR__}\assets\displayxr_app.ico"
+
 ; Components page: show per-section description on hover. SMALLDESC
 ; renders the description below the section list (compact layout).
 !define MUI_COMPONENTSPAGE_SMALLDESC
