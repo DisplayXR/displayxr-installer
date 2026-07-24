@@ -10,6 +10,7 @@ Tracks issue [`DisplayXR/displayxr-runtime#284`](https://github.com/DisplayXR/di
 |---|---|
 | macOS 13+ | [latest `.pkg`](https://github.com/DisplayXR/displayxr-installer/releases/latest) |
 | Windows 10/11 | [latest `.exe`](https://github.com/DisplayXR/displayxr-installer/releases/latest) |
+| Linux (Debian/Ubuntu amd64) | [latest `.tar.gz`](https://github.com/DisplayXR/displayxr-installer/releases/latest) — unpack, then `sudo ./install.sh` |
 
 ## One-time install warning (unsigned)
 
@@ -20,16 +21,31 @@ Version 1 of the bundle ships unsigned. SmartScreen / Gatekeeper show a one-time
 
 ## What gets installed
 
-| Component | macOS | Windows |
-|---|---|---|
-| DisplayXR Runtime | ✅ | ✅ |
-| DisplayXR Shell | — (Windows-only today) | ✅ |
-| Leia SR Plug-in | — (Windows-only, vendor SDK) | ✅ |
-| MCP Tools | — (Windows-only today) | ✅ |
+| Component | macOS | Windows | Linux |
+|---|---|---|---|
+| DisplayXR Runtime | ✅ | ✅ | ✅ |
+| DisplayXR Shell | — (Windows-only today) | ✅ | — |
+| Leia SR Plug-in | — (Windows-only, vendor SDK) | ✅ | ✅ |
+| MCP Tools | — (Windows-only today) | ✅ | — |
+| Demos (gauss, model viewer, media player, avatar, earthview) | ✅ | ✅ | ⏳ join when they ship a Linux `.deb` |
 
 macOS users get a runtime-only install today; additional components join the bundle as they publish `.pkg` artifacts.
 
 The exact version pins for each release live in [`versions.json`](versions.json) at the tagged commit.
+
+## Linux bundle
+
+The Linux bundle is a `.tar.gz` containing the component `.deb`s + an `install.sh`:
+
+```bash
+tar -xzf DisplayXRBundle-*-linux-amd64.tar.gz
+cd DisplayXRBundle-*-linux-amd64
+sudo ./install.sh          # sudo ./uninstall.sh to remove
+```
+
+It installs the DisplayXR runtime + Leia SR display-processor plug-in with **zero environment variables** — the runtime registers the OpenXR ActiveRuntime and searches `/usr/lib/displayxr/plugins` by default. Without the **Leia SR runtime** (the commercial `leiasr-runtime` package, shipped separately by Leia — **not** in this bundle) apps run on the built-in sim-display fallback; install it and the Leia display processor claims the display automatically. `install.sh` detects it and guides you.
+
+Demos are **not** included on Linux yet — they ship Windows `.exe` / macOS `.pkg` today but no Linux `.deb`. `build-bundle-linux.sh` already loops over them and will pull each one in automatically once its repo publishes a `*_amd64.deb` release asset (and `components.sh` gains its `DEB_LINUX` glob). Tracks [`DisplayXR/displayxr-runtime#781`](https://github.com/DisplayXR/displayxr-runtime/issues/781).
 
 ## Developer install
 
