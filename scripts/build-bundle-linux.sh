@@ -11,7 +11,7 @@
 #
 # The bundle chains the DisplayXR runtime + Leia SR plug-in (+ any demo that
 # ships a Linux .deb). The COMMERCIAL Leia SR runtime (leiasr-runtime) is NOT
-# bundled — it ships separately from Leia; install.sh detects it and guides the
+# bundled — the SR runtime ships separately; install.sh detects it and guides the
 # user. Demos are included automatically once their repo attaches a
 # `*_amd64.deb` release asset and components.sh gains their DEB_LINUX glob.
 #
@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --version)    VERSION="${2#v}"; shift 2 ;;
         --keep-stage) KEEP_STAGE=1; shift ;;
-        --core-only)  CORE_ONLY=1; shift ;;   # runtime + leia only, skip demos
+        --core-only)  CORE_ONLY=1; shift ;;   # runtime + leia-sr only, skip demos
         -h|--help)
             sed -n '2,30p' "$0"; exit 0 ;;
         *) echo "ERROR: unknown arg '$1'" >&2; exit 1 ;;
@@ -89,7 +89,7 @@ for name in "${COMPONENTS[@]}"; do
     fi
 done
 
-# runtime + leia are the non-negotiable core.
+# runtime + leia-sr are the non-negotiable core.
 for req in "displayxr-runtime_" "displayxr-leia-sr_"; do
     if ! ls "$DEBS"/${req}*_amd64.deb >/dev/null 2>&1; then
         echo "ERROR: required core .deb '${req}*_amd64.deb' missing — bundle is incomplete." >&2
