@@ -12,7 +12,7 @@
 # drives apps and the Leia DP declines — a clean fallback.
 #
 # The commercial Leia SR runtime (`leiasr-runtime`) is NOT bundled here — it
-# ships separately from Leia. This installer detects it and tells you how to
+# ships separately. This installer detects it and tells you how to
 # proceed if it is missing.
 #
 #   sudo ./install.sh            # install the bundled .debs

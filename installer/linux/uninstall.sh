@@ -3,7 +3,7 @@
 #
 # Removes the DisplayXR components this bundle installed. Does NOT touch the
 # commercial Leia SR runtime (leiasr-runtime) — that ships and is managed
-# separately by Leia.
+# separately by the SR vendor.
 #
 #   sudo ./uninstall.sh            # remove displayxr-leia-sr + displayxr-runtime
 #   sudo ./uninstall.sh --purge    # also purge config (active_runtime.json, etc.)
