@@ -92,8 +92,33 @@ jobs:
           path: _out\DisplayXRBundle-*.exe
           if-no-files-found: error
 
+  # Linux bundle (#781 Phase 3): packs the pinned per-component .deb release
+  # assets into DisplayXRBundle-<ver>-linux-amd64.tar.gz. build-bundle-linux.sh
+  # hard-requires the runtime + leia-sr core .debs and gracefully skips any
+  # demo whose Linux .deb isn't a released asset yet (logs "no-asset"). No sign
+  # step — .deb integrity is apt/dpkg's job, not Authenticode's.
+  build-linux:
+    needs: assert-versions-in-sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Build Linux bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/build-bundle-linux.sh --version "${{ inputs.tag }}"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: DisplayXRBundle-Linux
+          path: _out/DisplayXRBundle-*-linux-amd64.tar.gz
+          if-no-files-found: error
+
   release:
-    needs: [build-macos, build-windows]
+    needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -116,6 +141,7 @@ jobs:
           files: |
             _out/DisplayXRBundle-*.pkg
             _out/DisplayXRBundle-*.exe
+            _out/DisplayXRBundle-*-linux-amd64.tar.gz
           fail_on_unmatched_files: true
 
       # ---------------------------------------------------------------------
