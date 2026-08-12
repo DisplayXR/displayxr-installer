@@ -133,6 +133,7 @@ ShowUninstDetails show
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${BUNDLE_STAGE}\LICENSE"
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE ComponentsLeave
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -693,6 +694,38 @@ Function .onInit
     ${Else}
         !insertmacro UnselectSection ${SecLeia}
     ${EndIf}
+
+    ; Make the probe miss VISIBLE. Previously the only signal was the
+    ; checkbox silently defaulting to off, which reads as "not offered"
+    ; rather than "you're missing a prerequisite" — the user then finishes
+    ; the bundle believing Leia SR is covered. Non-modal by design: safe
+    ; under /S, and it costs nothing on a box that will never have SR.
+    ; Keyed on the probe alone, so it's equally true (and equally useful)
+    ; on the already-installed-but-SR-missing upgrade path.
+    ${If} $G_LeiaProbeHit == 0
+        SectionSetText ${SecLeia} "Leia SR plug-in (SR Platform not detected)"
+    ${EndIf}
+FunctionEnd
+
+;--------------------------------
+; Components page LEAVE — warn only when the user overrides the default
+; and ticks Leia SR on a box with no SR Platform. That's explicit intent,
+; so a modal is warranted here where a blanket .onInit warning would just
+; be noise for every non-Leia install.
+;
+; Page callbacks never run under /S (silent installs skip pages), but the
+; ${Silent} guard is explicit: an unguarded modal reachable from a silent
+; run hangs the bundle forever with no UI to dismiss.
+;--------------------------------
+Function ComponentsLeave
+    ${Unless} ${Silent}
+        ${If} ${SectionIsSelected} ${SecLeia}
+        ${AndIf} $G_LeiaProbeHit == 0
+            MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "The Leia SR Platform was not detected on this machine.$\n$\nThe plug-in will install, but it cannot load until the SR Platform is installed: DisplayXR silently falls back to 2D (sim-display) until then.$\n$\nAfter installing the SR Platform, restart displayxr-service.exe (or reboot) so it picks up the updated PATH.$\n$\nContinue with Leia SR selected?" /SD IDOK IDOK leia_no_sr_ok
+            Abort
+            leia_no_sr_ok:
+        ${EndIf}
+    ${EndUnless}
 FunctionEnd
 
 Function un.onInit
@@ -707,7 +740,7 @@ FunctionEnd
 LangString DESC_SecRuntime ${LANG_ENGLISH} "Core OpenXR runtime, service, and native compositors. Required by every other component."
 LangString DESC_SecShell   ${LANG_ENGLISH} "Spatial workspace + window manager for 3D apps. Multi-app layouts, chrome, file picker."
 LangString DESC_SecMcp     ${LANG_ENGLISH} "Claude / AI control adapter for DisplayXR. Required for the displayxr-mcp Tools experience."
-LangString DESC_SecLeia    ${LANG_ENGLISH} "Display processor for Leia SR 3D monitors. Auto-selected when SR Platform is detected."
+LangString DESC_SecLeia    ${LANG_ENGLISH} "Display processor for Leia SR 3D monitors. Auto-selected when SR Platform is detected. If it isn't, install the SR Platform first, then re-run this installer (Modify) to add the plug-in."
 LangString DESC_SecGauss   ${LANG_ENGLISH} "Sample 3D scene viewer (Gaussian splatting renderer). Standalone DisplayXR app."
 LangString DESC_SecModelViewer ${LANG_ENGLISH} "glTF 2.0 PBR model viewer (.glb/.gltf). Standalone DisplayXR app."
 LangString DESC_SecMediaPlayer ${LANG_ENGLISH} "Stereo 3D photo/video media player. Standalone DisplayXR app."
