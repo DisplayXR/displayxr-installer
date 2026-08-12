@@ -711,7 +711,7 @@ FunctionEnd
 ; Components page LEAVE — warn only when the user overrides the default
 ; and ticks Leia SR on a box with no SR Platform. That's explicit intent,
 ; so a modal is warranted here where a blanket .onInit warning would just
-; be noise for every non-Leia install.
+; be noise on every box that will never have the vendor platform.
 ;
 ; Page callbacks never run under /S (silent installs skip pages), but the
 ; ${Silent} guard is explicit: an unguarded modal reachable from a silent
@@ -721,9 +721,9 @@ Function ComponentsLeave
     ${Unless} ${Silent}
         ${If} ${SectionIsSelected} ${SecLeia}
         ${AndIf} $G_LeiaProbeHit == 0
-            MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "The Leia SR Platform was not detected on this machine.$\n$\nThe plug-in will install, but it cannot load until the SR Platform is installed: DisplayXR silently falls back to 2D (sim-display) until then.$\n$\nAfter installing the SR Platform, restart displayxr-service.exe (or reboot) so it picks up the updated PATH.$\n$\nContinue with Leia SR selected?" /SD IDOK IDOK leia_no_sr_ok
+            MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "The Leia SR Platform was not detected on this machine.$\n$\nThe plug-in will install, but it cannot load until the SR Platform is installed: DisplayXR silently falls back to 2D (sim-display) until then.$\n$\nAfter installing the SR Platform, restart displayxr-service.exe (or reboot) so it picks up the updated PATH.$\n$\nContinue with Leia SR selected?" /SD IDOK IDOK no_sr_platform_ok
             Abort
-            leia_no_sr_ok:
+            no_sr_platform_ok:
         ${EndIf}
     ${EndUnless}
 FunctionEnd
