@@ -72,13 +72,154 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install NSIS
+      # NSIS - prefer the copy already on the runner image.
+      #
+      # The GitHub `windows-*` images ship NSIS preinstalled at
+      # `C:\Program Files (x86)\NSIS\makensis.exe`. A bare
+      # `choco install nsis -y` is a single-attempt dependency on the
+      # Chocolatey CDN; when that CDN started answering 503 it took
+      # displayxr-shell-pvt's Windows build red for days
+      # (displayxr-shell-pvt#104). This is that fix, ported.
+      #
+      # Order: use the preinstalled makensis if present -> else retry
+      # `choco install` (pinned, --no-progress, exponential backoff) ->
+      # else download the official NSIS setup direct from SourceForge and
+      # verify its SHA-256 before running it. Never a bare single attempt.
+      # `scripts\build-bundle.bat` invokes `makensis` off PATH, so
+      # publishing the directory on GITHUB_PATH is all the build needs.
+      - name: Ensure NSIS
         shell: pwsh
+        env:
+          NSIS_FALLBACK_VERSION: '3.10'
+          # sha256 of nsis-3.10-setup.exe as published on SourceForge.
+          # NSIS releases are not Authenticode-signed, so the checksum is
+          # the only integrity control - verify before executing.
+          NSIS_FALLBACK_SHA256: '4313d352e0dafd1f22b6517126a655cae3b444fa758d2845eddfbe72f24f7bdd'
         run: |
-          choco install nsis -y --no-progress
-          # choco installs makensis to C:\Program Files (x86)\NSIS\ but
-          # does not update PATH for subsequent steps. Append explicitly.
-          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $ErrorActionPreference = 'Stop'
+          # PowerShell 7.4 defaults $PSNativeCommandUseErrorActionPreference
+          # to $true, which would turn a failing `choco install` into a
+          # terminating error and defeat the retry loop below.
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          function Find-MakeNSIS {
+            $cmd = Get-Command makensis -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd.Source }
+            $candidates = @(
+              "$env:ProgramFiles\NSIS\makensis.exe",
+              "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
+              'C:\Program Files\NSIS\makensis.exe',
+              'C:\Program Files (x86)\NSIS\makensis.exe',
+              "$env:ChocolateyInstall\bin\makensis.exe"
+            )
+            foreach ($p in $candidates) {
+              if ($p -and (Test-Path $p)) { return $p }
+            }
+            return $null
+          }
+
+          $mk = Find-MakeNSIS
+          if ($mk) {
+            Write-Host "NSIS already present on the runner image: $mk"
+          }
+
+          # (b1) Chocolatey, but resilient: pinned version, no progress
+          # spam, 3 attempts with exponential backoff.
+          if (-not $mk) {
+            Write-Host "::warning::NSIS not preinstalled -- falling back to Chocolatey."
+            $delay = 15
+            foreach ($attempt in 1..3) {
+              # Pin the version for reproducibility on the first two tries;
+              # if the pinned package itself is what the CDN can't serve,
+              # the last attempt takes whatever `nsis` currently resolves to
+              # rather than failing the build over a pin.
+              if ($attempt -lt 3) {
+                $cargs = @('install','nsis','--version',$env:NSIS_FALLBACK_VERSION,'-y','--no-progress')
+              } else {
+                $cargs = @('install','nsis','-y','--no-progress')
+              }
+              Write-Host "choco $($cargs -join ' ') (attempt $attempt/3)"
+              & choco @cargs
+              $mk = Find-MakeNSIS
+              if ($mk) { break }
+              if ($attempt -lt 3) {
+                Write-Host "Chocolatey install failed; retrying in ${delay}s..."
+                Start-Sleep -Seconds $delay
+                $delay = $delay * 2
+              }
+            }
+          }
+
+          # (b2) Direct download from the upstream release host, checksum-
+          # verified. Independent of the Chocolatey CDN entirely.
+          if (-not $mk) {
+            Write-Host "::warning::Chocolatey install failed -- downloading NSIS $env:NSIS_FALLBACK_VERSION direct."
+            $ver = $env:NSIS_FALLBACK_VERSION
+            $exe = Join-Path $env:RUNNER_TEMP 'nsis-setup.exe'
+            $want = $env:NSIS_FALLBACK_SHA256.ToLower()
+            $urls = @(
+              "https://downloads.sourceforge.net/project/nsis/NSIS%203/$ver/nsis-$ver-setup.exe",
+              "https://sourceforge.net/projects/nsis/files/NSIS%203/$ver/nsis-$ver-setup.exe/download",
+              "https://prdownloads.sourceforge.net/nsis/nsis-$ver-setup.exe?download"
+            )
+            # curl.exe (shipped in-box on every windows-* image) follows the
+            # SourceForge mirror redirects properly. Invoke-WebRequest
+            # -UseBasicParsing stops at the interstitial HTML page and saves
+            # ~147 KB of markup instead of the 1.5 MB installer -- verified
+            # locally -- so curl is the primary and IWR only the last resort.
+            # The checksum is what decides success, so an interstitial page
+            # simply rolls over to the next mirror instead of being executed.
+            $ok = $false
+            $delay = 15
+            foreach ($url in $urls) {
+              foreach ($attempt in 1..3) {
+                Remove-Item $exe -ErrorAction SilentlyContinue
+                Write-Host "GET $url (attempt $attempt/3)"
+                & curl.exe -sSL --fail --retry 2 --max-time 300 -o $exe $url
+                if (-not (Test-Path $exe)) {
+                  try {
+                    Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing -MaximumRedirection 10
+                  } catch {
+                    Write-Host "  download failed: $($_.Exception.Message)"
+                  }
+                }
+                if (Test-Path $exe) {
+                  $got = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+                  if ($got -eq $want) {
+                    Write-Host "  checksum OK ($got)"
+                    $ok = $true
+                    break
+                  }
+                  Write-Host "  checksum mismatch (got $got) -- not the installer; discarding."
+                  Remove-Item $exe -ErrorAction SilentlyContinue
+                }
+                if ($attempt -lt 3) { Start-Sleep -Seconds $delay; $delay = $delay * 2 }
+              }
+              if ($ok) { break }
+            }
+            if (-not $ok) {
+              Write-Error "Could not obtain a checksum-verified nsis-$ver-setup.exe (sha256 $want) from any mirror."
+            }
+
+            # NSIS ships a silent-install switch (/S) and honours /D=<dir>
+            # (must be the last argument, unquoted).
+            $dest = 'C:\NSIS'
+            $proc = Start-Process -FilePath $exe -ArgumentList '/S', "/D=$dest" -Wait -PassThru
+            if ($proc.ExitCode -ne 0) {
+              Write-Error "NSIS silent install failed (exit $($proc.ExitCode))."
+            }
+            if (Test-Path "$dest\makensis.exe") { $mk = "$dest\makensis.exe" } else { $mk = Find-MakeNSIS }
+          }
+
+          if (-not $mk) {
+            Write-Error "NSIS unavailable after every strategy (preinstalled / choco / direct download)."
+          }
+
+          # Publish on PATH for the build script's `makensis` lookup.
+          Add-Content -Path $env:GITHUB_PATH -Value (Split-Path -Parent $mk) -Encoding utf8
+          Write-Host "makensis: $mk"
+          & $mk /VERSION
+          Write-Host ""
 
       - name: Build Windows bundle
         env:
