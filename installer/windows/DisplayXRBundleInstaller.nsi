@@ -145,8 +145,10 @@ ShowUninstDetails show
 
 ;--------------------------------
 ; Globals — track current install state per child, populated in
-; .onInit, consumed in each component section. "Installed" = the
-; child's ARP UninstallString is present in HKLM 64-bit view.
+; .onInit, consumed in each component section. "Installed" = the child's
+; ARP entry is present in the HKLM 64-bit view AND the files it points at
+; still exist (#1233 — a marker alone is not evidence of an install; see
+; ProbeComponent).
 ;--------------------------------
 
 Var G_RuntimeInstalled
@@ -159,6 +161,11 @@ Var G_MediaPlayerInstalled
 Var G_AvatarInstalled
 Var G_EarthViewInstalled
 Var G_LeiaProbeHit       ; 1 iff SR Platform DLLs found on disk
+
+; #1233: human-readable list of components whose registry marker survived
+; but whose files did not, built in .onInit and printed once at the top of
+; the install so a repair run says WHY it is reinstalling.
+Var G_RepairList
 
 ; Installed DisplayVersion per child (from its ARP key), read in .onInit
 ; and compared against the bundle's pinned target version (#346).
@@ -249,6 +256,129 @@ Var G_EarthViewVer
 !macroend
 
 ;--------------------------------
+; Unquote — strip one pair of surrounding double quotes from VAR in place.
+; TMP is a scratch $Var the caller owns. ARP values are conventionally
+; quoted ("C:\...\Uninstall.exe"); ${FileExists} needs them bare.
+;--------------------------------
+!macro Unquote VAR TMP
+    StrCpy ${TMP} ${VAR} 1
+    ${If} ${TMP} == '$\"'
+        StrCpy ${VAR} ${VAR} "" 1
+        StrCpy ${TMP} ${VAR} 1 -1
+        ${If} ${TMP} == '$\"'
+            StrCpy ${VAR} ${VAR} -1
+        ${EndIf}
+    ${EndIf}
+!macroend
+
+;--------------------------------
+; ProbeComponent — decide whether a component is REALLY installed, not
+; merely remembered (#1233).
+;
+; The bundle used to read "is it installed?" off the existence of the ARP
+; UninstallString alone, and then let UpgradeOrSkip decide on a version
+; compare. A registry marker is not evidence that any file survives: after
+; an AV/EDR quarantine (the field case: SentinelOne ate the shell, the file
+; picker, MCP and 4 of 5 demo exes) every marker was intact, so the bundle
+; skipped all six components whose pin had not moved, left the box broken,
+; and exited 0 reporting success. It could not self-heal, which is the one
+; thing a user re-runs it for.
+;
+; So probe the marker's own targets. Both are checked, because the observed
+; damage hit them independently — Uninstall-Shell.exe was quarantined for
+; the shell, while for a demo the payload exe went and the uninstaller
+; stayed. Probing either one alone misses half the real cases:
+;   UninstallString -> "$INSTDIR\Uninstall*.exe"  (quoted, no args;
+;                      QuietUninstallString is the one that carries /S)
+;   DisplayIcon     -> the component's main payload file
+; Verified to hold for all nine children (runtime, shell, leia-plugin, mcp,
+; five demos), which is why one uniform probe needs no per-component table.
+;
+; DisplayIcon also has a documented "path,index" form. None of ours use it;
+; one that did would read as permanently broken here and reinstall on every
+; run. Fixing that means splitting on the last comma, and is only worth
+; doing if a child ever starts writing it.
+;
+; Stack in:  ARP key name (e.g. "DisplayXRShell")
+; Stack out: "1" installed and intact
+;            "0" marker present, files missing -> caller should REINSTALL
+;            ""  no marker at all -> not installed
+;--------------------------------
+Function ProbeComponent
+    Exch $R5                 ; in: ARP key -> out: verdict
+    Push $R1
+    Push $R2
+    Push $R3
+    Push $R4
+    StrCpy $R4 $R5           ; keep the key; $R5 is now the result slot
+
+    ReadRegStr $R1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$R4" "UninstallString"
+    ${If} $R1 == ""
+        StrCpy $R5 ""
+        Goto pc_done
+    ${EndIf}
+
+    ; Marker present. Believe it only as far as its targets survive.
+    StrCpy $R5 "1"
+
+    !insertmacro Unquote $R1 $R3
+    ${IfNot} ${FileExists} "$R1"
+        StrCpy $R5 "0"
+        Goto pc_done
+    ${EndIf}
+
+    ReadRegStr $R2 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$R4" "DisplayIcon"
+    ${If} $R2 != ""
+        !insertmacro Unquote $R2 $R3
+        ${IfNot} ${FileExists} "$R2"
+            StrCpy $R5 "0"
+        ${EndIf}
+    ${EndIf}
+
+  pc_done:
+    Pop $R4
+    Pop $R3
+    Pop $R2
+    Pop $R1
+    Exch $R5
+FunctionEnd
+
+;--------------------------------
+; DetectComponent — ProbeComponent + the per-child bookkeeping .onInit did
+; inline nine times over. Leaves the verdict in $0 so callers can keep
+; driving SelectSection off "is there a marker" (`$0 != ""`), which is a
+; different question from "are its files there" and stays the right one:
+; a component whose payload was eaten should come back PRE-CHECKED so the
+; run repairs it.
+;
+; A broken component is reported as NOT installed, so the section's
+; existing "not installed -> install" branch does a full reinstall — which
+; also rewrites the ARP entry and restores the uninstaller, curing an entry
+; that was unremovable while its uninstaller was missing.
+;
+; Args: ArpKey (literal)  InstalledVar ($Var)  VerVar ($Var)  Human (literal)
+;--------------------------------
+!macro DetectComponent ArpKey InstalledVar VerVar Human
+    Push "${ArpKey}"
+    Call ProbeComponent
+    Pop $0
+    ${If} $0 != ""
+        ReadRegStr ${VerVar} HKLM \
+            "Software\Microsoft\Windows\CurrentVersion\Uninstall\${ArpKey}" "DisplayVersion"
+        ${If} $0 == "1"
+            StrCpy ${InstalledVar} 1
+        ${Else}
+            ; Marker without files. Drop the recorded version too: leaving it
+            ; set would send this through UpgradeOrSkip, which compares
+            ; versions and would answer "current - skipping" over an empty dir.
+            StrCpy ${InstalledVar} 0
+            StrCpy ${VerVar} ""
+            StrCpy $G_RepairList "$G_RepairList${Human}, "
+        ${EndIf}
+    ${EndIf}
+!macroend
+
+;--------------------------------
 ; Component sections.
 ;
 ; Each optional section follows the same diff-and-act template:
@@ -273,6 +403,13 @@ Var G_EarthViewVer
 ; back mid-chain.
 ;--------------------------------
 Section "-StopDisplayXRProcesses"
+    ; #1233: say out loud that this run is a repair, and for what. A
+    ; component listed here had an intact registry marker over missing
+    ; files, so it is being reinstalled rather than version-skipped.
+    ${If} $G_RepairList != ""
+        StrCpy $0 $G_RepairList -2      ; drop the trailing ", "
+        DetailPrint "Repairing (registry entry present, files missing): $0"
+    ${EndIf}
     DetailPrint "Stopping DisplayXR processes for the install chain..."
     nsExec::ExecToLog 'taskkill /f /im displayxr-shell.exe'
     Pop $0
@@ -599,6 +736,7 @@ Function .onInit
     StrCpy $G_AvatarInstalled  0
     StrCpy $G_EarthViewInstalled 0
     StrCpy $G_LeiaProbeHit     0
+    StrCpy $G_RepairList       ""
     StrCpy $G_RuntimeVer       ""
     StrCpy $G_ShellVer         ""
     StrCpy $G_LeiaVer          ""
@@ -611,65 +749,47 @@ Function .onInit
 
     ; Runtime is RO so its checkbox state can't be unset; still record
     ; install state to skip a redundant /S re-run.
-    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXR" "UninstallString"
-    ${If} $0 != ""
-        StrCpy $G_RuntimeInstalled 1
-        ReadRegStr $G_RuntimeVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXR" "DisplayVersion"
-    ${EndIf}
+    !insertmacro DetectComponent "DisplayXR" $G_RuntimeInstalled $G_RuntimeVer "DisplayXR Runtime"
 
     ; Shell — default-checked. Pre-checked when already installed too.
-    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRShell" "UninstallString"
+    !insertmacro DetectComponent "DisplayXRShell" $G_ShellInstalled $G_ShellVer "DisplayXR Shell"
     ${If} $0 != ""
-        StrCpy $G_ShellInstalled 1
-        ReadRegStr $G_ShellVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRShell" "DisplayVersion"
         !insertmacro SelectSection ${SecShell}
     ${EndIf}
 
     ; MCP — default-checked. Pre-checked when already installed.
-    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMCP" "UninstallString"
+    !insertmacro DetectComponent "DisplayXRMCP" $G_McpInstalled $G_McpVer "DisplayXR MCP Tools"
     ${If} $0 != ""
-        StrCpy $G_McpInstalled 1
-        ReadRegStr $G_McpVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMCP" "DisplayVersion"
         !insertmacro SelectSection ${SecMcp}
     ${EndIf}
 
     ; Gauss demo — default-checked. Pre-checked when already installed.
-    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRGaussianSplat" "UninstallString"
+    !insertmacro DetectComponent "DisplayXRGaussianSplat" $G_GaussInstalled $G_GaussVer "Gaussian Splat viewer"
     ${If} $0 != ""
-        StrCpy $G_GaussInstalled 1
-        ReadRegStr $G_GaussVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRGaussianSplat" "DisplayVersion"
         !insertmacro SelectSection ${SecGauss}
     ${EndIf}
 
     ; Model viewer demo — default-checked. Pre-checked when already installed.
-    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRModelViewer" "UninstallString"
+    !insertmacro DetectComponent "DisplayXRModelViewer" $G_ModelViewerInstalled $G_ModelViewerVer "3D Model Viewer"
     ${If} $0 != ""
-        StrCpy $G_ModelViewerInstalled 1
-        ReadRegStr $G_ModelViewerVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRModelViewer" "DisplayVersion"
         !insertmacro SelectSection ${SecModelViewer}
     ${EndIf}
 
     ; Media player demo — default-checked. Pre-checked when already installed.
-    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMediaPlayer" "UninstallString"
+    !insertmacro DetectComponent "DisplayXRMediaPlayer" $G_MediaPlayerInstalled $G_MediaPlayerVer "Stereo Media Player"
     ${If} $0 != ""
-        StrCpy $G_MediaPlayerInstalled 1
-        ReadRegStr $G_MediaPlayerVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMediaPlayer" "DisplayVersion"
         !insertmacro SelectSection ${SecMediaPlayer}
     ${EndIf}
 
     ; Avatar demo — default-checked. Pre-checked when already installed.
-    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRAvatar" "UninstallString"
+    !insertmacro DetectComponent "DisplayXRAvatar" $G_AvatarInstalled $G_AvatarVer "3D Avatar"
     ${If} $0 != ""
-        StrCpy $G_AvatarInstalled 1
-        ReadRegStr $G_AvatarVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRAvatar" "DisplayVersion"
         !insertmacro SelectSection ${SecAvatar}
     ${EndIf}
 
     ; EarthView demo — default-checked. Pre-checked when already installed.
-    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXREarthView" "UninstallString"
+    !insertmacro DetectComponent "DisplayXREarthView" $G_EarthViewInstalled $G_EarthViewVer "EarthView"
     ${If} $0 != ""
-        StrCpy $G_EarthViewInstalled 1
-        ReadRegStr $G_EarthViewVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXREarthView" "DisplayVersion"
         !insertmacro SelectSection ${SecEarthView}
     ${EndIf}
 
@@ -684,10 +804,8 @@ Function .onInit
         StrCpy $G_LeiaProbeHit 1
     ${EndIf}
 
-    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaSR" "UninstallString"
+    !insertmacro DetectComponent "DisplayXRLeiaSR" $G_LeiaInstalled $G_LeiaVer "Leia SR plug-in"
     ${If} $0 != ""
-        StrCpy $G_LeiaInstalled 1
-        ReadRegStr $G_LeiaVer HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaSR" "DisplayVersion"
         !insertmacro SelectSection ${SecLeia}
     ${ElseIf} $G_LeiaProbeHit == 1
         !insertmacro SelectSection ${SecLeia}
