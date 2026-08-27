@@ -19,6 +19,13 @@
                glob, so calling it unconditionally is safe; what we guard
                against is forgetting to call it at all.
 
+    Not every pin is a bundle component. Membership in versions.json means
+    "the dev orchestrator can install this as a released asset", which is a
+    wider set than "the meta-bundle chains this" - so a pin may be
+    deliberately unbundled. Those are named in $IntentionallyUnbundled below
+    with the reason, and reported as skipped rather than passed over in
+    silence. An unlisted pin still fails, which is the point of the guard.
+
     Exit 0 when every component is chained on both platforms; exit 1 (listing
     the orphans per platform) otherwise.
 #>
@@ -38,8 +45,23 @@ $versions = Get-Content -Raw $versionsPath | ConvertFrom-Json
 $bat = Get-Content -Raw $batPath
 $sh  = Get-Content -Raw $shPath
 
+# Pins that are deliberately NOT chained by the bundle. Being in versions.json
+# only means setup-displayxr can install the component from a released asset;
+# enrolment in DisplayXRBundle-*.exe is a separate decision. Keep the reason
+# next to the entry - a bare allowlist decays into "someone silenced the guard
+# once, and nobody remembers why".
+$IntentionallyUnbundled = @{
+    browser = 'Opt-in only (setup-displayxr --with browser): the preview is rebased ~monthly onto Chrome stable but is NOT patched to Chrome mid-cycle security releases, so it must not ride the default install. Its tags are preview-X.Y.Z, so versions-bump validates its shape separately too.'
+}
+
 # Every property except the JSON-schema pointer is a pinned component.
-$components = $versions.PSObject.Properties.Name | Where-Object { $_ -ne '$schema' }
+$allPins    = $versions.PSObject.Properties.Name | Where-Object { $_ -ne '$schema' }
+$components = $allPins | Where-Object { -not $IntentionallyUnbundled.ContainsKey($_) }
+$skipped    = @($allPins | Where-Object { $IntentionallyUnbundled.ContainsKey($_) })
+
+foreach ($s in $skipped) {
+    Write-Host "SKIP: '$s' is pinned but intentionally unbundled - $($IntentionallyUnbundled[$s])"
+}
 
 $winOrphans = @()
 $macOrphans = @()
@@ -69,5 +91,5 @@ if ($failed) {
     exit 1
 }
 
-Write-Host "OK: all $($components.Count) versions.json components are chained by both bundle scripts."
+Write-Host "OK: all $($components.Count) bundled versions.json components are chained by both bundle scripts ($($skipped.Count) intentionally unbundled)."
 exit 0
