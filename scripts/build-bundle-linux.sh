@@ -78,15 +78,58 @@ for name in "${COMPONENTS[@]}"; do
         SKIPPED+=" $name(no-pin)"; continue
     fi
     echo "==> [$name @ $tag] downloading $glob from $repo"
-    if gh release download "$tag" --repo "$repo" --pattern "$glob" --dir "$DEBS" 2>/dev/null; then
-        GOT=$((GOT+1))
-    else
-        # A component with a DEB_LINUX glob but no released asset yet (e.g. a
-        # demo whose CI doesn't attach a .deb): log and keep going, don't fail
-        # the whole bundle.
+
+    # Ask what the release HAS before trying to fetch it (#35).
+    #
+    # `gh release download ... 2>/dev/null` collapsed every failure into one
+    # branch: a component that genuinely ships no .deb, a transient API error, a
+    # rate limit and an auth failure were all reported as "no matching asset".
+    # That is not merely a confusing message -- for a NON-core component the
+    # swallowed failure silently dropped it from the bundle and still exited 0,
+    # publishing a Linux bundle quietly missing a demo. (Bundle v2.2.4 hit the
+    # core half of this: the runtime .deb had been published 21 minutes earlier
+    # and a bare re-run went green.)
+    #
+    # So: a listing failure is fatal (we cannot tell anything), a genuine
+    # non-match is skippable, and a download that fails for an asset we can SEE
+    # is retried and then fatal -- never silently skipped.
+    if ! assets="$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' 2>&1)"; then
+        echo "ERROR: cannot list assets for $repo@$tag — refusing to guess whether it ships a .deb." >&2
+        echo "       gh said: ${assets:-<no output>}" >&2
+        exit 1
+    fi
+
+    match=""
+    while IFS= read -r a; do
+        [[ -z "$a" ]] && continue
+        # shellcheck disable=SC2053  -- intentional glob match, not a literal compare
+        if [[ "$a" == $glob ]]; then match="$a"; break; fi
+    done <<< "$assets"
+
+    if [[ -z "$match" ]]; then
+        # The one legitimately skippable case: the release really has no such
+        # asset (e.g. a demo whose CI doesn't attach a .deb yet).
         echo "    (no matching Linux .deb asset on $tag — skipping)"
         SKIPPED+=" $name(no-asset)"
+        continue
     fi
+
+    # The asset exists, so a failure here is a real failure. Retry briefly for
+    # transients, then fail loudly rather than shipping an incomplete bundle.
+    ok=no
+    for attempt in 1 2 3; do
+        if err="$(gh release download "$tag" --repo "$repo" --pattern "$glob" --dir "$DEBS" 2>&1)"; then
+            ok=yes; break
+        fi
+        echo "    attempt $attempt/3 failed: ${err:-<no output>}" >&2
+        sleep $((attempt * 5))
+    done
+    if [[ "$ok" != yes ]]; then
+        echo "ERROR: $name@$tag publishes '$match' but it could not be downloaded after 3 attempts." >&2
+        echo "       This is a download failure, NOT a missing asset — the bundle would be incomplete." >&2
+        exit 1
+    fi
+    GOT=$((GOT+1))
 done
 
 # runtime + leia-sr are the non-negotiable core.
