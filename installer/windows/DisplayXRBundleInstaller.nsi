@@ -435,6 +435,52 @@ Section "DisplayXR Runtime (required)" SecRuntime
     ${Else}
         !insertmacro UpgradeOrSkip $G_RuntimeVer "${RUNTIME_VER}" "${RUNTIME_EXE}" "DisplayXR Runtime" "/NOSTART"
     ${EndIf}
+
+    ; Re-assert the OpenXR ActiveRuntime registration UNCONDITIONALLY —
+    ; including on the version-skip path above, which is the whole point.
+    ;
+    ; ActiveRuntime is machine state this bundle owns, not versioned payload.
+    ; Any OpenXR runtime installed after us overwrites the single Khronos value
+    ; and every DisplayXR app on the box silently starts loading that one
+    ; instead. Re-running the bundle is the first thing a user tries, and it did
+    ; nothing: the files were all intact, so ProbeComponent said "installed";
+    ; the pin had not moved, so UpgradeOrSkip said "current - skipping"; so the
+    ; runtime sub-installer never ran and its ActiveRuntime write never
+    ; executed. Same structural failure as #1233 (a marker is not evidence of
+    ; correct state), a different flavour of state.
+    ;
+    ; This is not a background land-grab: it happens only inside an install the
+    ; user explicitly started. Nothing re-asserts the key at logon.
+    ;
+    ; Written inline rather than shelled out to `displayxr-cli runtime activate`
+    ; on purpose - on the skip path the CLI on disk is the OLD one, which may
+    ; predate the both-views fix, so the bundle must not depend on its version.
+    ReadRegStr $R1 HKLM "Software\DisplayXR\Runtime" "InstallPath"
+    ${If} $R1 != ""
+    ${AndIf} ${FileExists} "$R1\DisplayXR_win64.json"
+        ReadRegStr $R2 HKLM "Software\Khronos\OpenXR\1" "ActiveRuntime"
+        ${If} $R2 != "$R1\DisplayXR_win64.json"
+            ${If} $R2 == ""
+                DetailPrint "OpenXR ActiveRuntime was unset - pointing it at DisplayXR."
+            ${Else}
+                DetailPrint "OpenXR ActiveRuntime pointed at another runtime ($R2) - restoring DisplayXR."
+            ${EndIf}
+        ${EndIf}
+        WriteRegStr HKLM "Software\Khronos\OpenXR\1" "ActiveRuntime" "$R1\DisplayXR_win64.json"
+        WriteRegDWORD HKLM "Software\Khronos\OpenXR\1\AvailableRuntimes" "$R1\DisplayXR_win64.json" 0
+        ; 32-bit apps read the WOW6432Node view instead of the one above.
+        SetRegView 32
+        WriteRegStr HKLM "Software\Khronos\OpenXR\1" "ActiveRuntime" "$R1\DisplayXR_win64.json"
+        WriteRegDWORD HKLM "Software\Khronos\OpenXR\1\AvailableRuntimes" "$R1\DisplayXR_win64.json" 0
+        SetRegView 64
+        ; A per-user value silently outranks every write above.
+        DeleteRegValue HKCU "Software\Khronos\OpenXR\1" "ActiveRuntime"
+        SetRegView 32
+        DeleteRegValue HKCU "Software\Khronos\OpenXR\1" "ActiveRuntime"
+        SetRegView 64
+    ${Else}
+        DetailPrint "WARNING: no DisplayXR InstallPath on record - cannot assert ActiveRuntime."
+    ${EndIf}
 SectionEnd
 
 SectionGroup /e "Workspace" SecGrpWorkspace
