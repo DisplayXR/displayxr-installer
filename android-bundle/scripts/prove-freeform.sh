@@ -43,8 +43,8 @@ mode() { adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' | grep -
 echo "  before: pid=$PID0 $(mode)"
 # Leave ONLY the app under test in recents. Opening a file brings the system picker into recents
 # too, which shifts the card and makes a fixed-coordinate tap miss (measured 2026-09-10 on
-# mediaplayer 1.9.5; from 1.9.6 the picker trampolines into a task excluded from recents, so
-# there is nothing to sweep -- this stays correct either way). Remove every task that is not this package — after the app is running, so
+# mediaplayer 1.9.5 -- and on every shipped version since: the picker joins OUR task, so it
+# does land in recents and does need sweeping). Remove every task that is not this package — after the app is running, so
 # clearing cannot kill it.
 for _t in $(adb shell dumpsys activity recents 2>/dev/null | tr -d '\r' | grep -oE 'Recent #[0-9]+: Task\{[0-9a-f]+ #[0-9]+ [^}]*' | grep -v "$PKG" | grep -oE '#[0-9]+ ' | tr -d '# '); do adb shell am stack remove "$_t" >/dev/null 2>&1; done
 adb shell input keyevent KEYCODE_HOME; sleep 2
