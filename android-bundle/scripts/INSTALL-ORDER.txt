@@ -1,0 +1,12 @@
+For a clean-slate test, first run uninstall-displayxr.sh (see INSTALL.md).
+
+Manual install order — tap each APK in this order, in a file manager on the tablet.
+Order matters: services first, runtime second, apps last.
+
+  1. apks/1-cnsdk-services/     device-service      (com.leialoft.display.config)
+  2. apks/1-cnsdk-services/     headTracking-service
+  3. apks/2-displayxr-runtime/  the OpenXR runtime
+  4. apks/3-demos/              any/all demos
+  5. apks/4-browser/            the browser
+
+Then REBOOT the tablet.
