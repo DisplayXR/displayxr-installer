@@ -49,10 +49,14 @@ task_sz() {
 # refuses ANY task containing a foreign activity, so toggling too early yields no freeform
 # icon at all -- indistinguishable from "the app cannot do mini-windows" (mediaplayer#69).
 #
-# Holds for both app generations, which is why it keys on OUR task and nothing else: up to
-# 1.9.5 the picker runs inside our task, and from 1.9.6 the app trampolines it into a
-# separate task that is EXCLUDED FROM RECENTS. So do not rewrite this to look for the
-# picker in recents -- on 1.9.6 it is not there, and the check would silently pass early.
+# The picker runs INSIDE our task on every shipped version, so keying on our task's
+# activity count is the right signal. An earlier version of this comment claimed 1.9.6
+# trampolines the picker into a separate task -- that is WRONG: the trampoline was built,
+# measured and DROPPED, because the OEM ends the mini-window on ANY non-eligible activity
+# launched from inside it, whichever task hosts it (runtime docs R10). 1.9.6 changed only
+# the audio/video decode path (mediaplayer PR #70: audio_player, video_decoder, main.cpp;
+# no Kotlin, no manifest). Corrected here because a wrong claim about OEM behaviour sends
+# the next person hunting in the wrong place.
 wait_picker_done() {
     for _ in $(seq 1 20); do sleep 1; [ "$(task_sz)" = 1 ] && break; done
     _sz=$(task_sz)
