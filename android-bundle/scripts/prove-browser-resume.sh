@@ -10,19 +10,8 @@
 #   ./scripts/prove-browser-resume.sh
 set -u
 
-# Resting state (the project owner's standing rule): NEVER leave this pad's rotation locked, and never hand it
-# back in portrait. So a landscape PIN is for the duration of a run only; on exit restore
-# auto-rotate ON with landscape current.
-restore_rotation() {
-    adb shell wm fixed-to-user-rotation disabled >/dev/null 2>&1
-    adb shell settings put system accelerometer_rotation 1 >/dev/null 2>&1
-    adb shell settings put system user_rotation 1 >/dev/null 2>&1
-    sleep 2
-    printf '  pad rotation restored: auto-rotate=%s user_rotation=%s mCurrentOrientation=%s (want 1/1/1)\n' \
-      "$(adb shell settings get system accelerometer_rotation | tr -d '\r')" \
-      "$(adb shell settings get system user_rotation | tr -d '\r')" \
-      "$(adb shell dumpsys display 2>/dev/null | tr -d '\r' | grep -m1 -oE 'mCurrentOrientation=[0-9]+' | cut -d= -f2)"
-}
+. "$(dirname "$0")/lib.sh"        # restore_rotation, task_sz, wait_picker_done, open_mediaplayer_file
+
 trap restore_rotation EXIT
 PKG=org.chromium.chrome
 # The pad is often OFFLINE; the remote samples page then never loads and nothing weaves, which

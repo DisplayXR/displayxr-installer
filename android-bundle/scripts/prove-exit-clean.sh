@@ -9,9 +9,9 @@
 # The runtime may log `ignoring a torn sample … logical extent is still 1080x1685` — that is the fix
 # WORKING, not a fault.
 set -u
+
+. "$(dirname "$0")/lib.sh"        # restore_rotation, task_sz, wait_picker_done, open_mediaplayer_file
 PKG="${1:-com.displayxr.model_viewer_vk_android}"; N="${2:-4}"
-restore_rotation() { adb shell wm fixed-to-user-rotation disabled >/dev/null 2>&1
-    adb shell settings put system accelerometer_rotation 1 >/dev/null 2>&1; adb shell settings put system user_rotation 1 >/dev/null 2>&1; }
 trap restore_rotation EXIT
 adb shell wm fixed-to-user-rotation enabled >/dev/null 2>&1
 adb shell settings put system accelerometer_rotation 0; adb shell settings put system user_rotation 1

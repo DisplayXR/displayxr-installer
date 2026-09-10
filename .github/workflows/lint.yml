@@ -43,6 +43,36 @@ jobs:
           fi
           echo "OK: no non-allowlisted vendor-name references in authored files."
 
+      - name: Android harness helpers are defined once
+        run: |
+          # restore_rotation lived in seven copies and had already drifted into three
+          # variants -- two of them silently skipping the verification that the pad's
+          # rotation was actually handed back. lib.sh is now the single definition; this
+          # keeps it that way, and catches the other half of the mistake too (a script
+          # that calls a helper but forgot to source lib.sh, which fails only at runtime
+          # on the pad, i.e. exactly when it costs the most).
+          cd android-bundle/scripts
+          fns=$(grep -oE '^[a-z_]+\(\)' lib.sh | tr -d '()')
+          [ -n "$fns" ] || { echo "::error::lib.sh defines no functions -- did it move?"; exit 1; }
+          fail=0
+          for fn in $fns; do
+            dup=$(grep -l "^$fn() " *.sh | grep -v '^lib\.sh$' || true)
+            if [ -n "$dup" ]; then
+              echo "::error::$fn is defined in lib.sh and redefined in: $(echo $dup | tr '\n' ' ')"
+              fail=1
+            fi
+          done
+          for f in *.sh; do
+            [ "$f" = lib.sh ] && continue
+            used=""
+            for fn in $fns; do grep -qE "(^|[^A-Za-z_])$fn([^A-Za-z_]|$)" "$f" && used="$used $fn"; done
+            [ -n "$used" ] || continue
+            grep -q 'lib\.sh' "$f" || { echo "::error::$f calls$used but never sources lib.sh"; fail=1; }
+          done
+          for f in *.sh; do bash -n "$f" || { echo "::error::$f does not parse"; fail=1; }; done
+          [ "$fail" -eq 0 ] || exit 1
+          echo "OK: $(echo $fns | wc -w | tr -d ' ') helpers defined once in lib.sh; every caller sources it; all scripts parse."
+
       - name: Workflow YAML is valid
         run: |
           python3 -m pip install --quiet pyyaml

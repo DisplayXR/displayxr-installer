@@ -11,10 +11,10 @@
 # poison the touch-ratio scale measurement (0.37 vs 0.67 → cross-check refused → honest 2D), so a
 # green run here does NOT prove the real gesture works. Treat the two as separate claims.
 set -u
+
+. "$(dirname "$0")/lib.sh"        # restore_rotation, task_sz, wait_picker_done, open_mediaplayer_file
 PKG="${1:-com.displayxr.model_viewer_vk_android}"
 DROP_BOUNDS="2137 84 3217 1769"     # drop-zone geometry measured on the NP02J
-restore_rotation() { adb shell wm fixed-to-user-rotation disabled >/dev/null 2>&1
-    adb shell settings put system accelerometer_rotation 1 >/dev/null 2>&1; adb shell settings put system user_rotation 1 >/dev/null 2>&1; }
 trap restore_rotation EXIT
 adb shell wm fixed-to-user-rotation enabled >/dev/null 2>&1
 adb shell settings put system accelerometer_rotation 0; adb shell settings put system user_rotation 1

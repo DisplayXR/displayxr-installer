@@ -14,21 +14,12 @@
 #   android weave: imported woven 723x1129 …
 # and no `#1394: weave thread unresponsive`.
 set -u
+
+. "$(dirname "$0")/lib.sh"        # restore_rotation, task_sz, wait_picker_done, open_mediaplayer_file
 PKG=org.chromium.chrome
 URL="${1:-https://displayxr.github.io/displayxr-web/samples/windows/}"
 IX=1895; IY=302     # freeform icon on a single cleared-recents card, LANDSCAPE (portrait: 1150,475)
 
-# Pin landscape for the run; hand rotation back on exit (the project owner's rule: never leave it locked,
-# never hand back a portrait pad).
-restore_rotation() {
-    adb shell wm fixed-to-user-rotation disabled >/dev/null 2>&1
-    adb shell settings put system accelerometer_rotation 1 >/dev/null 2>&1
-    adb shell settings put system user_rotation 1 >/dev/null 2>&1
-    sleep 2
-    printf '  pad rotation restored: auto-rotate=%s orientation=%s\n' \
-      "$(adb shell settings get system accelerometer_rotation | tr -d '\r')" \
-      "$(adb shell dumpsys display 2>/dev/null | tr -d '\r' | grep -m1 -oE 'mCurrentOrientation=[0-9]+' | cut -d= -f2)"
-}
 trap restore_rotation EXIT
 adb shell wm fixed-to-user-rotation enabled >/dev/null 2>&1
 adb shell settings put system accelerometer_rotation 0; adb shell settings put system user_rotation 1
