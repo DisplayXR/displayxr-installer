@@ -24,6 +24,21 @@ prevents. Please keep those comments when editing: they are the reason the check
 | 11 | `verify-bundle.sh` | Offline consistency of the zip itself. |
 | 12 | `pad-lock.sh release <handle>` | Hands the tablet back. |
 
+## `lib.sh`
+
+Helpers shared by more than one script live in `lib.sh`, sourced as `. "$(dirname "$0")/lib.sh"`:
+`restore_rotation`, `task_sz`, `wait_picker_done`, `open_mediaplayer_file`. It exists because
+`restore_rotation` had been copied into seven scripts and had **already drifted into three
+variants**, two of which silently skipped the check that the pad's rotation was handed back.
+
+A lint step enforces it both ways: no script may redefine a name `lib.sh` defines, and any script
+that calls one must source it — the second mistake otherwise surfaces only at runtime on the pad.
+It also `bash -n`s every script.
+
+So the scripts are **not standalone any more**: `lib.sh` must sit beside them. The bundle ships the
+whole `scripts/` directory and `sync-from-repo.sh` keeps it complete, so this only bites if someone
+copies a single script out on its own.
+
 ## Keeping a bundle folder in sync
 
 This directory is the canonical copy. A bundle folder on someone's disk holds a **copy** of
