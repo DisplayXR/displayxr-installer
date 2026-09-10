@@ -76,7 +76,18 @@ open_mediaplayer_file() {
     case "$1" in *mediaplayer*) ;; *) return 0 ;; esac
     _re="${MP_FILE_RE:-lvf2|SBS}"
     sz=$(adb shell wm size | tr -d '\r' | sed 's/.*: //'); w=${sz%x*}; h=${sz#*x}
-    adb shell input tap $((w/2)) $((h/2)); sleep 5
+    adb shell input tap $((w/2)) $((h/2))
+    # WAIT for the picker window, do not sleep a fixed amount. documentsui cold-starts here,
+    # and 5s caught the 2D splash instead (measured 2026-09-10, stock 1.9.5): the dump then
+    # held no file nodes at all, which reads exactly like "there are no clips on this device"
+    # and sent the run on to measure the splash. Same class as the recents race below.
+    for _ in $(seq 1 20); do
+        sleep 1
+        case "$(adb shell dumpsys window 2>/dev/null | tr -d '\r' | grep -m1 -oE 'mCurrentFocus=Window\{[^}]*')" in
+          *documentsui*) break ;;
+        esac
+    done
+    sleep 1
     adb shell uiautomator dump /sdcard/mp.xml >/dev/null 2>&1
     _node=$(adb shell cat /sdcard/mp.xml 2>/dev/null | tr '>' '\n' \
               | grep -F 'resource-id="android:id/title"' \

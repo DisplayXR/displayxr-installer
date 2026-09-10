@@ -72,7 +72,18 @@ open_mediaplayer_file() {
     case "$1" in *mediaplayer*) ;; *) return 0 ;; esac
     _re="${MP_FILE_RE:-lvf2|SBS}"
     sz=$(adb shell wm size | tr -d '\r' | sed 's/.*: //'); w=${sz%x*}; h=${sz#*x}
-    adb shell input tap $((w/2)) $((h/2)); sleep 5
+    adb shell input tap $((w/2)) $((h/2))
+    # WAIT for the picker window, do not sleep a fixed amount. documentsui cold-starts here,
+    # and 5s caught the 2D splash instead (measured 2026-09-10, stock 1.9.5): the dump then
+    # held no file nodes at all, which reads exactly like "there are no clips on this device"
+    # and sent the run on to measure the splash. Same class as the recents race below.
+    for _ in $(seq 1 20); do
+        sleep 1
+        case "$(adb shell dumpsys window 2>/dev/null | tr -d '\r' | grep -m1 -oE 'mCurrentFocus=Window\{[^}]*')" in
+          *documentsui*) break ;;
+        esac
+    done
+    sleep 1
     adb shell uiautomator dump /sdcard/mp.xml >/dev/null 2>&1
     _node=$(adb shell cat /sdcard/mp.xml 2>/dev/null | tr '>' '\n' \
               | grep -F 'resource-id="android:id/title"' \
@@ -216,7 +227,12 @@ app_ver() {
       *avatar*)       glob='apks/3-demos/DisplayXRAvatar-*.apk' ;;
       *)              echo unknown; return ;;
     esac
-    f=$(ls $glob 2>/dev/null | head -1); [ -n "$f" ] || { echo unknown; return; }
+    # The glob is relative to the CWD, so this only resolves when run from the bundle folder.
+    # Say so: "unknown" otherwise reads as "the installed APK is not the bundle file", which
+    # is a different and much more alarming claim (measured 2026-09-10 -- ran from a source
+    # checkout, got "unknown", and the message accused a perfectly good install).
+    f=$(ls $glob 2>/dev/null | head -1)
+    [ -n "$f" ] || { echo unknown; echo "  note: no $glob under $PWD -- run from the bundle folder to version-check the APK" >&2; return; }
     fv=$(basename "$f" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     inst=$(adb shell pm path "$pkg" 2>/dev/null | tr -d '\r' | sed 's/^package://' | head -1)
     if [ -n "$inst" ]; then
