@@ -24,6 +24,26 @@ prevents. Please keep those comments when editing: they are the reason the check
 | 11 | `verify-bundle.sh` | Offline consistency of the zip itself. |
 | 12 | `pad-lock.sh release <handle>` | Hands the tablet back. |
 
+## Keeping a bundle folder in sync
+
+This directory is the canonical copy. A bundle folder on someone's disk holds a **copy** of
+`scripts/`, refreshed by `sync-from-repo.sh` — copy that one file into the bundle folder once and it
+keeps both itself and `scripts/` current from a local checkout.
+
+```
+./sync-from-repo.sh            # take the repo copy; writes SCRIPTS-PROVENANCE.txt
+./sync-from-repo.sh --check    # report drift, write nothing, exit 1 if drifted
+```
+
+**Before zipping a bundle, run `sync-from-repo.sh --check`** — a zip built from a drifted folder
+ships a harness nobody reviewed. It refuses to sync when `android-bundle/` has uncommitted changes,
+and refuses to `--delete` into a directory that does not look like a bundle. `SCRIPTS-PROVENANCE.txt`
+records which commit the copy came from; it is a per-sync artifact and is not tracked here.
+
+A copy, not a symlink, and deliberately so: macOS "Compress" in Finder uses `ditto`, which stores a
+symlinked directory as a ~7-byte link instead of following it, so the zip would carry no scripts and
+report no error. Only `zip -r` follows it. The script header repeats this — please keep it.
+
 ## What these scripts cannot prove
 
 - **The drop-zone drag.** Swiping up, holding and dragging a window into the release corner is not
