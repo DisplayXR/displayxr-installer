@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the whole stack onto a connected Leia tablet, from a computer with adb.
+# Install the whole stack onto a connected 3D tablet, from a computer with adb.
 #
 #   ./scripts/install-from-computer.sh
 #
