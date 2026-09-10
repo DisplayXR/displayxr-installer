@@ -21,10 +21,12 @@ set -u
 # How many activities the app's task holds. The SAF picker runs INSIDE our task
 # (startActivityForResult), so the task grows while the picker is up and returns to exactly
 # one activity when the pick completes.
-# A stale install leaves dead tasks behind under the SAME package name (two uids and
-# three sz=0 tasks seen on the pad, 2026-09-10), so take the VISIBLE task -- picking the
-# first match can read a dead sz=0 task and hang the wait below on a task that will never
-# reach 1. "visible=true" does not substring-match "visibleRequested=true".
+# A stale install leaves dead task records behind under the SAME package name. Measured on
+# the pad 2026-09-10: dumpsys carried 19 tasks matching the mediaplayer package across TWO
+# uids -- the live one (visible, sz=1) plus records from an uninstalled debug-signed build,
+# most of them sz=0. So take the VISIBLE task: picking the first match can read a dead sz=0
+# task and hang the wait below forever on something that will never reach 1.
+# "visible=true" does not substring-match "visibleRequested=true".
 task_sz() {
     _pre=$(printf '%s' "${1:-$PKG}" | sed 's/[.]/\\./g')
     _tasks=$(adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' \
