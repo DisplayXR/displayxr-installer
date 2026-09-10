@@ -13,10 +13,11 @@
 #             com.displayxr.CNSDK_LOADER_BUILD    x.y.z+<n>.<sha>  (identification only)
 #   services  com.leia.cnsdk.FULL_VERSION         x.y.z+build  (CNSDK >= 0.10.65)
 set -u
+
+. "$(dirname "$0")/lib.sh"        # ver(), require_pad()
 RT=org.freedesktop.monado.openxr_runtime.out_of_process
 command -v adb >/dev/null || { echo "adb not found."; exit 1; }
 AAPT2=$(ls -d "$HOME"/Library/Android/sdk/build-tools/*/aapt2 "${ANDROID_HOME:-/nonexistent}"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
-ver() { adb shell dumpsys package "$1" 2>/dev/null | tr -d '\r' | grep -m1 versionName | tr -d ' ' | cut -d= -f2; }
 # stamp <pkg> <meta-data name> -> value, "" if absent, "?" if it could not be read
 stamp() {
     local p; p=$(adb shell pm path "$1" 2>/dev/null | tr -d '\r' | sed 's/^package://' | head -1)

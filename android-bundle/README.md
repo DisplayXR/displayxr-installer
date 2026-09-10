@@ -27,7 +27,7 @@ prevents. Please keep those comments when editing: they are the reason the check
 ## `lib.sh`
 
 Helpers shared by more than one script live in `lib.sh`, sourced as `. "$(dirname "$0")/lib.sh"`:
-`restore_rotation`, `task_sz`, `wait_picker_done`, `open_mediaplayer_file`. It exists because
+`restore_rotation`, `task_sz`, `wait_picker_done`, `open_mediaplayer_file`, `ver`, `require_pad`. It exists because
 `restore_rotation` had been copied into seven scripts and had **already drifted into three
 variants**, two of which silently skipped the check that the pad's rotation was handed back.
 
@@ -71,6 +71,15 @@ report no error. Only `zip -r` follows it. The script header repeats this — pl
   APKs in a file manager does; at least one first-launch failure is invisible here.
 
 ## Shared-tablet protocol
+
+**The lock is now enforced, not merely advised.** Every script that changes device state calls
+`require_pad` first and exits 1 if another handle holds the lock. Export `PAD_HANDLE=<your handle>`
+when you hold it so your own runs pass. This exists because advice was not enough: on 2026-09-10 a
+run began three seconds after another session took the lock — `pad-lock.sh` refused to hand it over,
+but the caller had not checked its exit status, so the run proceeded anyway and force-stopped that
+session's app, cleared its recents and dropped its rotation pin mid-measurement. `audit-device.sh` is
+read-only and deliberately not gated; `install-on-tablet.sh` runs on-device with no `adb` and cannot
+check.
 
 One driver at a time, coordinated through `/data/local/tmp/pad.lock` holding
 `<handle> <ISO timestamp> <what, and for how long>`. An **empty** lock file means held-by-unknown,

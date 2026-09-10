@@ -65,7 +65,13 @@ jobs:
           for f in *.sh; do
             [ "$f" = lib.sh ] && continue
             used=""
-            for fn in $fns; do grep -qE "(^|[^A-Za-z_])$fn([^A-Za-z_]|$)" "$f" && used="$used $fn"; done
+            # Ignore FULL-LINE comments -- "<ver>" in prose tripped this. Deliberately not
+            # stripping trailing comments: a '#' inside a string (grep 'Recent #[0-9]+')
+            # would truncate real code and turn this into a false negative, which is the
+            # expensive direction. Keep the match loose otherwise, so `trap restore_rotation
+            # EXIT` still counts as a use.
+            body=$(sed 's/^[[:space:]]*#.*$//' "$f")
+            for fn in $fns; do printf '%s\n' "$body" | grep -qE "(^|[^A-Za-z_])$fn([^A-Za-z_]|$)" && used="$used $fn"; done
             [ -n "$used" ] || continue
             grep -q 'lib\.sh' "$f" || { echo "::error::$f calls$used but never sources lib.sh"; fail=1; }
           done

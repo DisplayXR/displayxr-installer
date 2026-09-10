@@ -13,6 +13,7 @@
 set -u
 
 . "$(dirname "$0")/lib.sh"        # restore_rotation, task_sz, wait_picker_done, open_mediaplayer_file
+require_pad        # refuse if another handle holds /data/local/tmp/pad.lock (PAD_HANDLE=<you> to pass)
 PKG="${1:-com.displayxr.model_viewer_vk_android}"
 DROP_BOUNDS="2137 84 3217 1769"     # drop-zone geometry measured on the NP02J
 trap restore_rotation EXIT
