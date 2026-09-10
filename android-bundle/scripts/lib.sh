@@ -120,3 +120,39 @@ open_mediaplayer_file() {
     adb shell input tap $(( ($1+$3)/2 )) $(( ($2+$4)/2 ))
     wait_picker_done
 }
+
+# Installed versionName, normalised for comparison. Strips whitespace and a LEADING "v"
+# only -- the old prove-freeform copy used `tr -d ' v'`, which deletes EVERY v and quietly
+# turned 1.9.5-dev into 1.9.5-de. The leading v must go because callers feed this to
+# atleast()/sort -V against bare numbers like 2.16.17. Cost of the merge: audit-device.sh
+# and reset-to-virgin.sh now PRINT versions without the leading v (2.16.23, not v2.16.23).
+ver() { adb shell dumpsys package "$1" 2>/dev/null | tr -d '\r' | grep -m1 versionName | cut -d= -f2 | tr -d ' ' | sed 's/^v//'; }
+
+# Refuse to drive the pad when another handle holds the lock.
+#
+# The lock used to be purely ADVISORY: pad-lock.sh would refuse to hand it over, but a
+# caller that did not check its exit status walked straight through and drove the device
+# anyway. That happened for real on 2026-09-10 -- a run started three seconds after
+# another session took the lock, force-stopped its app, cleared its recents and dropped
+# its rotation pin, mid-measurement. Advice in a README cannot prevent that; a refusal
+# here can. Every script that CHANGES device state calls this first.
+#
+# Export PAD_HANDLE=<your handle> when you hold the lock, so your own runs pass.
+require_pad() {
+    _pl=/data/local/tmp/pad.lock
+    _ex=$(adb shell "test -e $_pl && echo yes || echo no" 2>/dev/null | tr -d '\r')
+    [ "$_ex" = yes ] || return 0                       # free
+    _lk=$(adb shell cat "$_pl" 2>/dev/null | tr -d '\r')
+    if [ -z "$_lk" ]; then
+        echo "  REFUSING: $_pl exists but is EMPTY -- that means held-by-unknown, never free." >&2
+        echo "  Find out whose it is before touching this pad." >&2
+        exit 1
+    fi
+    _h=${_lk%% *}
+    if [ -n "${PAD_HANDLE:-}" ] && [ "$_h" = "${PAD_HANDLE}" ]; then return 0; fi
+    echo "  REFUSING: the pad is held by another handle." >&2
+    echo "    lock: $_lk" >&2
+    echo "  If that handle is you, re-run with PAD_HANDLE=$_h. Otherwise wait for them to release;" >&2
+    echo "  driving a pad someone else is measuring destroys their run and yours." >&2
+    exit 1
+}

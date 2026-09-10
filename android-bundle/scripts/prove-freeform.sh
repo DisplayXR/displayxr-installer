@@ -15,6 +15,7 @@
 set -u
 
 . "$(dirname "$0")/lib.sh"        # restore_rotation, task_sz, wait_picker_done, open_mediaplayer_file
+require_pad        # refuse if another handle holds /data/local/tmp/pad.lock (PAD_HANDLE=<you> to pass)
 
 trap restore_rotation EXIT
 PKG="${1:-com.displayxr.model_viewer_vk_android}"; IX="${2:-1895}"; IY="${3:-302}"
@@ -107,7 +108,6 @@ SCALED2D=$(printf '%s\n' "$LOG" | grep -c 'CONTAINER_SCALED: .*presenting 2D')
 MINI1TO1=$(printf '%s\n' "$LOG" | grep -c 'miniWindow1to1: ON')
 HINT=$(printf '%s\n' "$LOG" | grep -c 'hint ON scale=')
 WEDGE=$(printf '%s\n' "$LOG" | grep -c '#1394: weave thread unresponsive')
-ver() { adb shell dumpsys package "$1" 2>/dev/null | tr -d '\r' | grep -m1 versionName | cut -d= -f2 | tr -d ' v'; }
 # The demos all declare versionCode=1 / versionName=0.1 in their manifests, so the DEVICE carries
 # no version signal for them (verified 2026-09-07). The bundle FILENAME is the record of what was
 # installed, so read it there — and prove the installed APK really is that file by sha256, or the

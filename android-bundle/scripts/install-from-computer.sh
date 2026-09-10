@@ -18,6 +18,9 @@
 #   * grants CAMERA to GaussianSplat and Avatar, or they open on a consent dialog.
 #   * enables the browser's inline-3D flag (see the browser note below).
 set -u
+
+. "$(dirname "$0")/lib.sh"        # ver(), require_pad()
+require_pad        # refuse if another handle holds /data/local/tmp/pad.lock (PAD_HANDLE=<you> to pass)
 cd "$(dirname "$0")/.."
 
 # --replace-mismatched: on a signing-key mismatch, uninstall the old app and retry.

@@ -11,6 +11,7 @@
 set -u
 
 . "$(dirname "$0")/lib.sh"        # restore_rotation, task_sz, wait_picker_done, open_mediaplayer_file
+require_pad        # refuse if another handle holds /data/local/tmp/pad.lock (PAD_HANDLE=<you> to pass)
 PKG="${1:-com.displayxr.model_viewer_vk_android}"; N="${2:-4}"
 trap restore_rotation EXIT
 adb shell wm fixed-to-user-rotation enabled >/dev/null 2>&1

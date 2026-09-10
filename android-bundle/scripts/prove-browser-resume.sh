@@ -11,6 +11,7 @@
 set -u
 
 . "$(dirname "$0")/lib.sh"        # restore_rotation, task_sz, wait_picker_done, open_mediaplayer_file
+require_pad        # refuse if another handle holds /data/local/tmp/pad.lock (PAD_HANDLE=<you> to pass)
 
 trap restore_rotation EXIT
 PKG=org.chromium.chrome

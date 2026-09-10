@@ -24,6 +24,7 @@
 set -u
 
 . "$(dirname "$0")/lib.sh"        # restore_rotation, task_sz, wait_picker_done, open_mediaplayer_file
+require_pad        # refuse if another handle holds /data/local/tmp/pad.lock (PAD_HANDLE=<you> to pass)
 
 trap restore_rotation EXIT
 cd "$(dirname "$0")/.."
@@ -32,7 +33,6 @@ for a in "$@"; do case "$a" in --yes) DRY=0 ;; --revert-services) REVERT_SERVICE
 command -v adb >/dev/null || { echo "adb not found."; exit 1; }
 N=$(adb devices | grep -cw device)
 [ "$N" -eq 1 ] || { echo "Need exactly one device connected and authorised (found $N)."; adb devices; exit 1; }
-ver() { adb shell dumpsys package "$1" 2>/dev/null | tr -d '\r' | grep -m1 versionName | tr -d ' ' | cut -d= -f2; }
 flags() { adb shell dumpsys package "$1" 2>/dev/null | tr -d '\r' | grep -m1 'flags=' | sed -E 's/.*flags=//'; }
 
 REMOVE=()

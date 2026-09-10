@@ -11,6 +11,9 @@
 # uninstalling it can leave the panel in a bad state. The installer upgrades it in
 # place instead, which is the supported path.
 set -u
+
+. "$(dirname "$0")/lib.sh"        # ver(), require_pad()
+require_pad        # refuse if another handle holds /data/local/tmp/pad.lock (PAD_HANDLE=<you> to pass)
 cd "$(dirname "$0")/.."
 DRY=1; [ "${1:-}" = "--yes" ] && DRY=0
 
