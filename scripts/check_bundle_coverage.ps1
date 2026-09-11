@@ -51,7 +51,7 @@ $sh  = Get-Content -Raw $shPath
 # next to the entry - a bare allowlist decays into "someone silenced the guard
 # once, and nobody remembers why".
 $IntentionallyUnbundled = @{
-    browser = 'Opt-in only (setup-displayxr --with browser): the preview is rebased ~monthly onto Chrome stable but is NOT patched to Chrome mid-cycle security releases, so it must not ride the default install. Its tags are preview-X.Y.Z, so versions-bump validates its shape separately too.'
+    browser = 'Opt-in only (setup-displayxr --with browser): a full standalone browser is something a user asks for, not part of the display stack the default install lays down, so it must not ride the default install. Enrolling it in the default install / the desktop bundle is a separate decision (browser-pvt#120 D4). Its tags are vX.Y.Z from v1.0.0, validated by versions-bump like every other component.'
       cnsdk_services = 'Android only, and not installable by setup-displayxr at all: it pins the pair of CNSDK display-service APKs on the PRIVATE repo LeiaInc/CNSDK, fetched with LEIALOFT_GITHUB_TOKEN by build-android-bundle.yml to assemble the Android tablet bundle. The desktop bundle is Windows/macOS installers and has no Android lane to chain it into. This is the pin that made versions.json membership mean "desktop orchestrator installs it OR a platform bundle pins it".'
 }
 
