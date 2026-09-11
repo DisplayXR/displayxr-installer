@@ -154,8 +154,16 @@ jobs:
           gh release download "$CNSDK_TAG" -R LeiaInc/CNSDK -D "$lic" --clobber \
              -p 'cnsdk-android-[0-9]*.zip'
           z=$(ls "$lic"/cnsdk-android-[0-9]*.zip | head -1)
-          unzip -q -o -j "$z" 'LICENSE-3RD-PARTY.txt' 'LICENSE.txt' -d "_bundle/$BUNDLE/licenses" || true
-          for f in LICENSE-3RD-PARTY.txt LICENSE.txt; do
+          # The zip nests everything under a VERSIONED top-level dir
+          # (cnsdk-android-<ver>/...), so bare names never match -- unzip just
+          # warns "filename not matched" and carries on. Glob the leading path.
+          # ZMQ.AUTHORS.txt and SIMDJSON.AUTHORS.txt are the upstream copyright
+          # notices that libzmq's LGPL asks to accompany the binary, so they
+          # ship too.
+          unzip -q -o -j "$z" '*/LICENSE-3RD-PARTY.txt' '*/LICENSE.txt' \
+                              '*/ZMQ.AUTHORS.txt' '*/SIMDJSON.AUTHORS.txt' \
+                              -d "_bundle/$BUNDLE/licenses" || true
+          for f in LICENSE-3RD-PARTY.txt LICENSE.txt ZMQ.AUTHORS.txt SIMDJSON.AUTHORS.txt; do
             if [ ! -s "_bundle/$BUNDLE/licenses/$f" ]; then
               echo "::error::$f missing from $(basename "$z") — the bundle redistributes LGPL/MPL/Apache-licensed binaries and MUST carry the notices. Do not ship without it."
               exit 1
@@ -445,7 +453,7 @@ jobs:
           rows=$(grep -c '^| `apks/' MANIFEST.md || true)
           [ "$rows" = 9 ] || { echo "::error::MANIFEST.md lists $rows APKs, expected 9 — generation stopped early"; exit 1; }
           grep -q 'NOT hardware-verified' MANIFEST.md || { echo "::error::MANIFEST.md lost its verification caveat"; exit 1; }
-          for f in LICENSE-3RD-PARTY.txt LICENSE.txt; do
+          for f in LICENSE-3RD-PARTY.txt LICENSE.txt ZMQ.AUTHORS.txt SIMDJSON.AUTHORS.txt; do
             [ -s "licenses/$f" ] || { echo "::error::licenses/$f absent at pack time — refusing to ship LGPL/MPL/Apache binaries without their notices"; exit 1; }
           done
           head -40 MANIFEST.md
