@@ -141,6 +141,29 @@ jobs:
              -p 'headTracking-service-release-*.apk'
           ls -l "$d"
 
+          # Third-party notices. The service APKs do NOT embed them, but
+          # libleiaCore-impl.so statically links libzmq under a modified LGPLv3
+          # whose static-link exception still requires the licence text and
+          # copyright notice to ACCOMPANY the binary; Eigen is MPL-2.0 and
+          # several components are Apache-2.0, both of which require the notice
+          # to travel with the distribution. The texts ship inside the CNSDK
+          # release zip, so pull it for those two files and drop nothing else.
+          # LICENSE.txt is shipped too because it is the licence a downstream
+          # consumer of this bundle is actually bound by.
+          lic=$(mktemp -d)
+          gh release download "$CNSDK_TAG" -R LeiaInc/CNSDK -D "$lic" --clobber \
+             -p 'cnsdk-android-[0-9]*.zip'
+          z=$(ls "$lic"/cnsdk-android-[0-9]*.zip | head -1)
+          unzip -q -o -j "$z" 'LICENSE-3RD-PARTY.txt' 'LICENSE.txt' -d "_bundle/$BUNDLE/licenses" || true
+          for f in LICENSE-3RD-PARTY.txt LICENSE.txt; do
+            if [ ! -s "_bundle/$BUNDLE/licenses/$f" ]; then
+              echo "::error::$f missing from $(basename "$z") — the bundle redistributes LGPL/MPL/Apache-licensed binaries and MUST carry the notices. Do not ship without it."
+              exit 1
+            fi
+          done
+          rm -rf "$lic"
+          ls -l "_bundle/$BUNDLE/licenses"
+
       - name: Download the runtime, the browser and the five demos
         env:
           GH_TOKEN: ${{ github.token }}
@@ -372,6 +395,15 @@ jobs:
             echo
             echo "## Device family"
             echo
+            echo "## Licences"
+            echo ""
+            echo "\`licenses/LICENSE-3RD-PARTY.txt\` carries the third-party notices for the vendor"
+            echo "display services — the CNSDK core statically links libzmq (modified LGPLv3), Eigen"
+            echo "(MPL-2.0) and Apache-2.0 components, all of which require their notices to travel"
+            echo "with the binaries. \`licenses/LICENSE.txt\` is the licence a consumer of this bundle"
+            echo "is bound by. Both are copied verbatim from the CNSDK release; the build FAILS if"
+            echo "either is missing rather than shipping the binaries without them."
+            echo ""
             echo "**The display-service APKs in \`apks/1-cnsdk-services/\` target the NP02J device"
             echo "family only. Do not install them on a Lume Pad 2** — that device has a different"
             echo "service lineage and different signing keys, and these builds will not update"
@@ -413,6 +445,9 @@ jobs:
           rows=$(grep -c '^| `apks/' MANIFEST.md || true)
           [ "$rows" = 9 ] || { echo "::error::MANIFEST.md lists $rows APKs, expected 9 — generation stopped early"; exit 1; }
           grep -q 'NOT hardware-verified' MANIFEST.md || { echo "::error::MANIFEST.md lost its verification caveat"; exit 1; }
+          for f in LICENSE-3RD-PARTY.txt LICENSE.txt; do
+            [ -s "licenses/$f" ] || { echo "::error::licenses/$f absent at pack time — refusing to ship LGPL/MPL/Apache binaries without their notices"; exit 1; }
+          done
           head -40 MANIFEST.md
 
       - name: Zip it
