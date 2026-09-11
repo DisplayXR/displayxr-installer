@@ -1,0 +1,456 @@
+name: build-android-bundle
+
+# Assemble the Android tablet bundle from PINNED release artifacts, gate it with the
+# harness in android-bundle/scripts/, and emit the zip.
+#
+# Why this exists: the zip was assembled by hand on one Mac and the expected/*.txt gate
+# files were filled in by pasting sha256s from release pages. A hand-typed digest has
+# already false-passed. Here every hash in expected/<runtime>.txt is COMPUTED from the
+# artifact this run downloaded, so the gate cannot disagree with the bytes it ships.
+#
+# What that does and does not buy, stated plainly because it is easy to over-read:
+#   - it gates ASSEMBLY and TRANSPORT: the zip a tester unpacks holds exactly the APKs
+#     this run downloaded, and the runtime/plug-in/service cross-checks in the harness
+#     hold over those bytes;
+#   - it does NOT gate the CHOICE of build. versions.json is what says which release is
+#     meant; this workflow trusts it.
+#   - it does NOT establish that the bundle works on a tablet. Nothing in CI installs
+#     anything. See android-bundle/README.md "What these scripts cannot prove".
+#
+# Trigger is workflow_dispatch only, never push: it downloads ~500 MB of release assets
+# and reaches a private repo for the vendor display services.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Also attach the zip + its sha256 to a DRAFT release (default: CI artifact only)"
+        type: boolean
+        default: false
+      release_tag:
+        description: "Tag for that release (default: android-bundle-<UTC date>)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write   # only exercised by the final, opt-in publish step
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Preflight — the tools the harness itself invokes
+        run: |
+          set -euo pipefail
+          # check-artifacts.sh and verify-bundle.sh shell out to unzip, strings, shasum,
+          # aapt2 and apksigner. A missing one does not always fail loudly there: a missing
+          # apksigner downgrades the browser DEBUG-KEY check from FAIL to WARN, and a
+          # missing aapt2 turns the loader-stamp check into a "not checked" note. So assert
+          # them here, where the failure is unambiguous, before anything is downloaded.
+          need=""
+          for t in jq unzip zip strings shasum; do command -v "$t" >/dev/null || need="$need $t"; done
+          if [ -n "$need" ]; then
+            echo "installing for:$need"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq binutils unzip zip perl jq
+          fi
+          for t in jq unzip zip strings shasum; do
+            command -v "$t" >/dev/null || { echo "::error::$t is unavailable on this runner and could not be installed"; exit 1; }
+          done
+
+          # The harness was written on a Mac and discovers the Android build-tools ONLY at
+          # $HOME/Library/Android/sdk/build-tools/*/ — a hardcoded path in both scripts.
+          # Rather than fork the scripts (they are the reviewed, version-controlled gate),
+          # give the runner that path. The SDK itself is preinstalled on the GitHub image.
+          sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          bt=$(ls -d "$sdk"/build-tools/*/ 2>/dev/null | sort -V | tail -1 || true)
+          [ -n "$bt" ] || { echo "::error::no Android build-tools under $sdk — the runner image changed; the gates need aapt2 + apksigner"; exit 1; }
+          bt="${bt%/}"
+          case "$bt" in
+            "$HOME"/Library/Android/sdk/*) echo "build-tools are already where the harness looks" ;;
+            *) mkdir -p "$HOME/Library/Android/sdk/build-tools"
+               # rm first: `ln -s` onto an existing DIRECTORY silently creates the link
+               # INSIDE it, and the discovery glob would then find nothing.
+               rm -rf "$HOME/Library/Android/sdk/build-tools/$(basename "$bt")"
+               ln -s "$bt" "$HOME/Library/Android/sdk/build-tools/$(basename "$bt")" ;;
+          esac
+
+          # Assert with the scripts' OWN discovery expression, not an equivalent of it —
+          # the point is that what THEY will find is present and runnable.
+          A=$(ls -d "$HOME"/Library/Android/sdk/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1 || true)
+          S=$(ls -d "$HOME"/Library/Android/sdk/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)
+          [ -n "$A" ] && [ -x "$A" ] || { echo "::error::aapt2 not reachable at the path the harness looks in"; exit 1; }
+          [ -n "$S" ] && [ -x "$S" ] || { echo "::error::apksigner not reachable at the path the harness looks in (the browser signing check would silently downgrade to a warning)"; exit 1; }
+          "$A" version
+          "$S" --version
+          echo "AAPT2=$A" >> "$GITHUB_ENV"
+
+      - name: Resolve the pins from versions.json
+        run: |
+          set -euo pipefail
+          pin() { jq -r --arg k "$1" '.[$k] // ""' versions.json; }
+
+          # The vendor services are pinned under cnsdk_services. Read it defensively: the
+          # key is being added in a separate PR, and a bundle assembled without it would
+          # silently ship no display services at all.
+          CNSDK_TAG=$(pin cnsdk_services)
+          if [ -z "$CNSDK_TAG" ]; then
+            echo "::error::versions.json has no \"cnsdk_services\" pin. It is added by a separate PR (expected shape: \"cnsdk_services\": \"v0.10.68\"). Re-run this workflow once that has landed — do not hand-assemble around it."
+            exit 1
+          fi
+
+          fail=0
+          set_pin() {  # set_pin <env-name> <versions.json key>
+            v=$(pin "$2")
+            if [ -z "$v" ]; then echo "::error::versions.json has no \"$2\" pin"; fail=1; return; fi
+            echo "$1=$v" >> "$GITHUB_ENV"
+            printf '  %-20s %s\n' "$2" "$v"
+          }
+          echo "CNSDK_TAG=$CNSDK_TAG" >> "$GITHUB_ENV"
+          printf '  %-20s %s\n' cnsdk_services "$CNSDK_TAG"
+          set_pin RUNTIME_TAG     runtime
+          set_pin PLUGIN_PIN      leia_plugin
+          set_pin BROWSER_TAG     browser
+          set_pin AVATAR_TAG      avatar_demo
+          set_pin GAUSS_TAG       gauss_demo
+          set_pin MODELVIEWER_TAG modelviewer_demo
+          set_pin EARTHVIEW_TAG   earthview_demo
+          set_pin MEDIAPLAYER_TAG mediaplayer_demo
+          [ "$fail" -eq 0 ] || exit 1
+
+          RT=$(pin runtime)
+          echo "RUNTIME_VER=${RT#v}" >> "$GITHUB_ENV"
+          echo "BUNDLE=displayxr-tablet-bundle-$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+
+      - name: Download the vendor display services (private repo)
+        env:
+          GH_TOKEN: ${{ secrets.LEIALOFT_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::secret LEIALOFT_GITHUB_TOKEN is not set on this repo — the display-service APKs live in a private repo and cannot be fetched without it"
+            exit 1
+          fi
+          d="_bundle/$BUNDLE/apks/1-cnsdk-services"
+          mkdir -p "$d"
+          # Capital T in headTracking is load-bearing: asset-name matching is case-sensitive.
+          gh release download "$CNSDK_TAG" -R LeiaInc/CNSDK -D "$d" --clobber \
+             -p 'device-service-release-*.apk' \
+             -p 'headTracking-service-release-*.apk'
+          ls -l "$d"
+
+      - name: Download the runtime, the browser and the five demos
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          b="_bundle/$BUNDLE"
+          mkdir -p "$b/apks/2-displayxr-runtime" "$b/apks/3-demos" "$b/apks/4-browser"
+
+          # The runtime release carries TWO Android APKs: the vendor-plug-in build and a
+          # plain one (sim-display). The tablet needs the vendor build. The vendor token is
+          # assembled at runtime so this file does not itself carry the company name — the
+          # repo's vendor-name guard in lint.yml enforces that, and does the same to itself.
+          V="Le""ia"
+
+          gh release download "$RUNTIME_TAG" -R DisplayXR/displayxr-runtime \
+             -D "$b/apks/2-displayxr-runtime" --clobber \
+             -p "DisplayXR-Runtime-$V-*-android-arm64.apk"
+
+          gh release download "$BROWSER_TAG" -R DisplayXR/displayxr-browser \
+             -D "$b/apks/4-browser" --clobber \
+             -p 'DisplayXR-Browser-Preview-*-android-arm64.apk'
+
+          # Each demo comes from its own repo at its own pin: "<repo>|<tag>|<asset glob>".
+          for e in \
+            "displayxr-demo-avatar|$AVATAR_TAG|DisplayXRAvatar-*.apk" \
+            "displayxr-demo-gaussiansplat|$GAUSS_TAG|DisplayXRGaussianSplat-*.apk" \
+            "displayxr-demo-modelviewer|$MODELVIEWER_TAG|DisplayXRModelViewer-*.apk" \
+            "displayxr-demo-earthview|$EARTHVIEW_TAG|DisplayXREarthView-*-android.apk" \
+            "displayxr-demo-mediaplayer|$MEDIAPLAYER_TAG|DisplayXRMediaPlayer-*.apk" ; do
+            repo=${e%%|*}; rest=${e#*|}; tag=${rest%%|*}; pat=${rest##*|}
+            echo "-- $repo @ $tag  ($pat)"
+            gh release download "$tag" -R "DisplayXR/$repo" -D "$b/apks/3-demos" --clobber -p "$pat"
+          done
+          find "$b/apks" -type f | sort
+
+      - name: Every glob resolved to exactly one APK
+        run: |
+          set -euo pipefail
+          cd "_bundle/$BUNDLE"
+          V="Le""ia"
+          fail=0
+          one() {  # one <glob>
+            n=$(ls -1 $1 2>/dev/null | wc -l | tr -d ' ')
+            if [ "$n" = 1 ]; then printf '  %-62s %s\n' "$1" "-> $(basename $(ls -1 $1))"
+            else echo "::error::expected exactly one file matching $1, found $n"; ls -1 $1 2>/dev/null | sed 's/^/      /'; fail=1; fi
+          }
+          one 'apks/1-cnsdk-services/device-service-release-*.apk'
+          one 'apks/1-cnsdk-services/headTracking-service-release-*.apk'
+          one "apks/2-displayxr-runtime/DisplayXR-Runtime-$V-*-android-arm64.apk"
+          one 'apks/4-browser/DisplayXR-Browser-Preview-*-android-arm64.apk'
+          for g in DisplayXRAvatar DisplayXRGaussianSplat DisplayXRModelViewer DisplayXREarthView DisplayXRMediaPlayer; do
+            one "apks/3-demos/$g-*.apk"
+          done
+          # Nine, and only nine. A stray tenth APK (e.g. the sim-display runtime landing in
+          # the runtime slot) would be installed by the harness without comment.
+          n=$(find apks -name '*.apk' | wc -l | tr -d ' ')
+          [ "$n" = 9 ] || { echo "::error::bundle holds $n APKs, expected 9"; find apks -name '*.apk' | sort | sed 's/^/      /'; fail=1; }
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: Lay out the harness beside the APKs
+        run: |
+          set -euo pipefail
+          b="_bundle/$BUNDLE"
+          mkdir -p "$b/expected"
+          cp -a android-bundle/scripts "$b/scripts"
+          cp -a android-bundle/sync-from-repo.sh "$b/sync-from-repo.sh"
+          chmod +x "$b/scripts"/*.sh "$b/sync-from-repo.sh"
+
+          # Verbatim, whole directory: lib.sh must sit beside its callers, and the lint job
+          # already guarantees the set is self-consistent. diff, not a file count, so a
+          # truncated copy cannot pass.
+          diff -r android-bundle/scripts "$b/scripts"
+          [ -f "$b/scripts/lib.sh" ] || { echo "::error::lib.sh missing from the copied harness"; exit 1; }
+
+          # Same shape sync-from-repo.sh writes, so a later --check in the unpacked bundle
+          # compares against a real commit instead of finding no provenance at all.
+          {
+            echo "scripts/ is a synced copy -- do not edit it here, edit the repo and re-sync."
+            echo
+            echo "source : DisplayXR/displayxr-installer  android-bundle/scripts/"
+            echo "commit : $(git rev-parse --short HEAD)  (${GITHUB_REF_NAME})  $(git log -1 --pretty=%s)"
+            echo "synced : $(date -u +%Y-%m-%dT%H:%M:%SZ)  by build-android-bundle.yml run ${GITHUB_RUN_ID}"
+            echo "files  : $(ls -1 "$b/scripts" | wc -l | tr -d ' ')"
+          } > "$b/SCRIPTS-PROVENANCE.txt"
+
+          # INSTALL.md is being added to android-bundle/ separately. Ship it when it is
+          # there; say so when it is not, rather than failing or inventing one.
+          if [ -f android-bundle/INSTALL.md ]; then
+            cp -a android-bundle/INSTALL.md "$b/INSTALL.md"
+            echo "INSTALL.md: shipped"
+          else
+            echo "::notice::android-bundle/INSTALL.md does not exist yet — bundle shipped without it"
+          fi
+
+      - name: Generate expected/<runtime>.txt from the downloaded artifacts
+        run: |
+          set -euo pipefail
+          cd "_bundle/$BUNDLE"
+          EXP="expected/${RUNTIME_VER}.txt"
+          RT=$(ls apks/2-displayxr-runtime/*.apk | head -1)
+          DS=$(ls apks/1-cnsdk-services/device-service-release-*.apk | head -1)
+
+          # Read the runtime's CNSDK loader stamps with EXACTLY the pipeline check-artifacts.sh
+          # uses, so the two cannot disagree about parsing. dumpsys does not print meta-data;
+          # aapt2 xmltree is the only offline route.
+          st=$("$AAPT2" dump xmltree --file AndroidManifest.xml "$RT" 2>/dev/null \
+               | grep -A1 CNSDK_LOADER_ \
+               | grep -oE 'value\([^)]*\)="[^"]*"' | sed -E 's/.*="([^"]*)"/\1/' | tr '\n' ' ')
+          set -- $st
+          [ "$#" -eq 2 ] || { echo "::error::expected two CNSDK loader stamps in the runtime manifest, got [$st] — a runtime predating displayxr-runtime#1356 cannot be gated this way"; exit 1; }
+          LOADER_VER=$1; LOADER_BUILD=$2
+
+          # SERVICE_IMPL: the vendor core actually carried by the device-service APK. A
+          # service that REPORTS 0.10.68 while carrying a different core is the exact failure
+          # this directive was added for, so hash the .so, never trust a version string.
+          t=$(mktemp -d)
+          unzip -q -o -j "$DS" 'lib/arm64-v8a/libleiaCore-impl.so' -d "$t"
+          IMPL=$(shasum -a 256 "$t/libleiaCore-impl.so" | cut -d' ' -f1)
+          rm -rf "$t"
+
+          # --- carried forward VERBATIM from the hand-maintained expected/ files ----------
+          # Do NOT regenerate these from the artifact: a marker's whole job is to be absent
+          # from the PREVIOUS build, and one derived from the build in front of you can never
+          # be absent. `request_display_mode` (unsuffixed) was exactly that mistake: present
+          # in 2.6.19 and 2.6.20 alike, so it passed a wrong plug-in.
+          # When the plug-in pin moves, update this block by hand and PROVE the new markers
+          # discriminate — run the gate against the previous artifact and require a FAIL
+          # (android-bundle/README.md, "The expected/ files"). The two cross-checks below
+          # stop the block from rotting silently in the meantime.
+          printf '%s\n' \
+            'PLUGIN_EMBEDS cnsdk-android-0.10.68+192.4e2202b' \
+            'PLUGIN_EMBEDS get_last_frame_dropped_cnsdk' \
+            '# REAL v2.6.20 discriminators, verified by diffing the v2.6.20 release tarball against the' \
+            '# 2.6.19 .so inside runtime 2.16.21. NOTE: plain `request_display_mode` is present in BOTH' \
+            "# (it is the runtime header's vtable slot name) — using it as a version check FALSE-PASSES." \
+            '# The _cnsdk-suffixed implementation symbols and the plug-in version string are absent from 2.6.19.' \
+            'PLUGIN_EMBEDS v2.6.20' \
+            'PLUGIN_EMBEDS request_display_mode_cnsdk' \
+            'PLUGIN_EMBEDS leia_cnsdk_set_display_mode_3d' \
+            > "$RUNNER_TEMP/markers.txt"
+
+          # Cross-check 1: the carried CNSDK marker against the loader build stamped in the
+          # runtime's manifest. Two independent places in the APK, so this is a real check.
+          grep -q "^PLUGIN_EMBEDS cnsdk-android-${LOADER_BUILD}\$" "$RUNNER_TEMP/markers.txt" || {
+            echo "::error::the carried PLUGIN_EMBEDS block pins a CNSDK build that this runtime does not stamp (runtime says ${LOADER_BUILD}). Update the block in this workflow and prove the new markers discriminate against the previous artifact."; exit 1; }
+
+          # Cross-check 2: the carried plug-in version marker against versions.json's pin.
+          m=$(grep -oE '^PLUGIN_EMBEDS v[0-9]+\.[0-9]+\.[0-9]+$' "$RUNNER_TEMP/markers.txt" | awk '{print $2}' | head -1)
+          [ -n "$m" ] || { echo "::error::the carried PLUGIN_EMBEDS block has no plug-in version marker"; exit 1; }
+          [ "$m" = "$PLUGIN_PIN" ] || {
+            echo "::error::carried plug-in marker $m disagrees with versions.json leia_plugin=$PLUGIN_PIN. Update the PLUGIN_EMBEDS block in this workflow to the new build's REAL discriminators and prove they fail against the previous artifact."; exit 1; }
+
+          {
+            echo "# GENERATED by .github/workflows/build-android-bundle.yml — do not hand-edit."
+            echo "# run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "#"
+            echo "# Every sha256 here was computed from the artifact this run downloaded from its"
+            echo "# pinned release. That gates the zip's integrity — assembly, transport, unzip —"
+            echo "# not the CHOICE of build, which is versions.json's job. The PLUGIN_EMBEDS block"
+            echo "# is carried forward by hand precisely because it must NOT be derived from the"
+            echo "# artifact it checks."
+            for f in $(find apks -name '*.apk' | sort); do
+              printf '%s %s\n' "$f" "$(shasum -a 256 "$f" | cut -d' ' -f1)"
+            done
+            echo "RUNTIME_STAMPS $LOADER_VER $LOADER_BUILD"
+            cat "$RUNNER_TEMP/markers.txt"
+            echo "SERVICE_IMPL $IMPL"
+          } > "$EXP"
+
+          echo "--- $EXP ---"
+          cat "$EXP"
+
+      - name: Gate — check-artifacts.sh
+        run: |
+          set -euo pipefail
+          cd "_bundle/$BUNDLE"
+          ./scripts/check-artifacts.sh "expected/${RUNTIME_VER}.txt"
+
+      - name: Gate — verify-bundle.sh
+        run: |
+          set -euo pipefail
+          cd "_bundle/$BUNDLE"
+          ./scripts/verify-bundle.sh
+
+      - name: Generate MANIFEST.md
+        run: |
+          set -euo pipefail
+          cd "_bundle/$BUNDLE"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          # source repo + tag per APK, keyed on the file's directory and name prefix
+          src() {
+            case "$1" in
+              *device-service-release-*|*Tracking-service-release-*) echo "LeiaInc/CNSDK|$CNSDK_TAG" ;;
+              *2-displayxr-runtime/*)        echo "DisplayXR/displayxr-runtime|$RUNTIME_TAG" ;;
+              *4-browser/*)                  echo "DisplayXR/displayxr-browser|$BROWSER_TAG" ;;
+              *DisplayXRAvatar-*)            echo "DisplayXR/displayxr-demo-avatar|$AVATAR_TAG" ;;
+              *DisplayXRGaussianSplat-*)     echo "DisplayXR/displayxr-demo-gaussiansplat|$GAUSS_TAG" ;;
+              *DisplayXRModelViewer-*)       echo "DisplayXR/displayxr-demo-modelviewer|$MODELVIEWER_TAG" ;;
+              *DisplayXREarthView-*)         echo "DisplayXR/displayxr-demo-earthview|$EARTHVIEW_TAG" ;;
+              *DisplayXRMediaPlayer-*)       echo "DisplayXR/displayxr-demo-mediaplayer|$MEDIAPLAYER_TAG" ;;
+              *) echo "?|?" ;;
+            esac
+          }
+
+          {
+            echo "# Android tablet bundle — $BUNDLE"
+            echo
+            echo "Assembled by CI from pinned release artifacts."
+            echo
+            echo "- run: $RUN_URL"
+            echo "- built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- harness: \`scripts/\` @ $(git rev-parse --short HEAD) (see SCRIPTS-PROVENANCE.txt)"
+            echo "- gate file: \`expected/${RUNTIME_VER}.txt\`, generated from these artifacts"
+            echo
+            echo "## What this bundle IS and IS NOT verified for"
+            echo
+            echo "**Artifact-verified, NOT hardware-verified.** Both offline gates"
+            echo "(\`check-artifacts.sh\`, \`verify-bundle.sh\`) passed in CI over exactly the files"
+            echo "below, so the zip holds the builds its pins name and the runtime, its display"
+            echo "plug-in and the display services agree with one another on paper."
+            echo
+            echo "Nothing here has been installed on a tablet. CI cannot do a virgin install, cannot"
+            echo "judge whether the picture is right, and cannot run the tap-the-APK path a tester"
+            echo "actually uses — two real defects this year passed every scripted check. Before"
+            echo "handing this to anyone, run the on-device half of the harness:"
+            echo "\`install-from-computer.sh\`, \`audit-device.sh\`, then the \`prove-*.sh\` scripts,"
+            echo "and have a human look at the display."
+            echo
+            echo "## Device family"
+            echo
+            echo "**The display-service APKs in \`apks/1-cnsdk-services/\` target the NP02J device"
+            echo "family only. Do not install them on a Lume Pad 2** — that device has a different"
+            echo "service lineage and different signing keys, and these builds will not update"
+            echo "cleanly onto it."
+            echo
+            echo "## Contents"
+            echo
+            echo "| file | package | version | sha256 | size | source | tag |"
+            echo "|---|---|---|---|---|---|---|"
+            for f in $(find apks -name '*.apk' | sort); do
+              # No early `exit` in awk: it closes the pipe, aapt2 dies of SIGPIPE and,
+              # under pipefail, the whole step aborts mid-file leaving a truncated MANIFEST.
+              badge=$("$AAPT2" dump badging "$f" 2>/dev/null | awk -F"'" '/^package: name=/{print $2"|"$6}' | tr -d '\n')
+              pkg=${badge%%|*}; ver=${badge##*|}
+              s=$(shasum -a 256 "$f" | cut -d' ' -f1)
+              sz=$(du -h "$f" | cut -f1)
+              st=$(src "$f"); repo=${st%%|*}; tag=${st##*|}
+              echo "| \`$f\` | \`${pkg:-?}\` | ${ver:-?} | \`$s\` | $sz | $repo | $tag |"
+            done
+            echo
+            echo "\`version\` is the \`versionName\` inside the APK; several demos never bump it."
+            echo "The authoritative version of each component is the release **tag** column."
+            echo
+            echo "## Install order"
+            echo
+            echo '```'
+            cat scripts/INSTALL-ORDER.txt
+            echo '```'
+            echo
+            echo "## Pins this run used (versions.json @ $(git rev-parse --short HEAD))"
+            echo
+            echo '```json'
+            git show HEAD:versions.json
+            echo '```'
+          } > MANIFEST.md
+
+          # A half-written MANIFEST looks plausible and documents a bundle that is not this
+          # one, so prove it is complete rather than assuming the generator ran to the end.
+          rows=$(grep -c '^| `apks/' MANIFEST.md || true)
+          [ "$rows" = 9 ] || { echo "::error::MANIFEST.md lists $rows APKs, expected 9 — generation stopped early"; exit 1; }
+          grep -q 'NOT hardware-verified' MANIFEST.md || { echo "::error::MANIFEST.md lost its verification caveat"; exit 1; }
+          head -40 MANIFEST.md
+
+      - name: Zip it
+        run: |
+          set -euo pipefail
+          ( cd _bundle && zip -q -r -X "$GITHUB_WORKSPACE/$BUNDLE.zip" "$BUNDLE" )
+          shasum -a 256 "$BUNDLE.zip" | tee "$BUNDLE.zip.sha256"
+          ls -lh "$BUNDLE.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BUNDLE }}
+          path: |
+            ${{ env.BUNDLE }}.zip
+            ${{ env.BUNDLE }}.zip.sha256
+          retention-days: 14
+          compression-level: 0   # already a zip; recompressing ~500 MB buys nothing
+
+      - name: Attach to a release
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # via env, not inline ${{ }}: a dispatch input interpolated straight into the
+          # shell would be executed, not quoted.
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          [ -n "$TAG" ] || TAG="android-bundle-$(date -u +%Y-%m-%d)"
+          # Created as a DRAFT pre-release. Whether this bundle may be published publicly
+          # from this repo is an open decision by the repo owner; a draft is visible to
+          # collaborators and becomes public only when a human presses publish.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$BUNDLE.zip" "$BUNDLE.zip.sha256" --clobber
+          else
+            gh release create "$TAG" "$BUNDLE.zip" "$BUNDLE.zip.sha256" \
+              --draft --prerelease \
+              --title "Android tablet bundle $TAG" \
+              --notes "Assembled by [run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) from the pins in versions.json. Artifact-verified by the android-bundle harness; NOT hardware-verified — see MANIFEST.md inside the zip."
+          fi
+          gh release view "$TAG" --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}'
