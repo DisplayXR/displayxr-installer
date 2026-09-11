@@ -156,7 +156,7 @@ every scripted check here and still fail someone's first launch.
 
 ### 4. UNINSTALL any older DisplayXR Browser before installing this one
 
-**This bundle ships a RELEASE-SIGNED browser (0.1.28; every build since 0.1.25 is).** Every preview up to
+**This bundle ships a RELEASE-SIGNED browser (0.1.28; every build since 0.1.25 is).** Every build up to
 and including 0.1.24 was signed with Chromium's debug key. Android identifies an app by
 its signing key and **refuses an install that changes it** — you get a bare
 *"App not installed"* with nothing naming the cause.
@@ -171,7 +171,7 @@ data**, so it is never the default:
 Without the flag the script still detects the mismatch and prints the exact
 `adb uninstall` command; it just will not wipe anything on your behalf.
 
-One time only; future previews upgrade normally. Fixes the OEM App Center refusal some
+One time only; later browser releases upgrade normally. Fixes the OEM App Center refusal some
 testers hit on first launch (browser#188).
 
 Coming from 0.1.25, 0.1.26 or 0.1.27: no uninstall needed, the upgrade is in place.
@@ -182,7 +182,7 @@ this bundle, check the installed browser really is 0.1.28 (`scripts/audit-device
 
 ### 5. Browser inline-3D — nothing to do (0.1.24 and later)
 
-**The bundled browser preview 0.1.28 ships inline-3D ON by default.** No adb, no
+**The bundled browser 0.1.28 ships inline-3D ON by default.** No adb, no
 command-line file, no step. Just open the browser.
 
 This step existed for 0.1.23 and earlier, which gated 3D behind `--enable-inline-3d`

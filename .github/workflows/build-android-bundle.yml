@@ -190,9 +190,22 @@ jobs:
              -D "$b/apks/2-displayxr-runtime" --clobber \
              -p "DisplayXR-Runtime-$V-*-android-arm64.apk"
 
+          # Both browser asset names are accepted (browser-pvt#120): releases up to
+          # preview-0.1.35 ship DisplayXR-Browser-Preview-<v>-android-arm64.apk, v1.0.0
+          # onward ship DisplayXR-Browser-<v>-android-arm64.apk. This glob matches either.
           gh release download "$BROWSER_TAG" -R DisplayXR/displayxr-browser \
              -D "$b/apks/4-browser" --clobber \
-             -p 'DisplayXR-Browser-Preview-*-android-arm64.apk'
+             -p 'DisplayXR-Browser-*-android-arm64.apk'
+
+          # If a staged release ever carries the same bytes under BOTH names, keep the
+          # non-Preview one (the completeness assert below demands exactly one APK here).
+          # The non-Preview name has the version right after the dash, so a leading digit
+          # is what tells the two apart.
+          if ls "$b"/apks/4-browser/DisplayXR-Browser-Preview-*-android-arm64.apk >/dev/null 2>&1 \
+             && ls "$b"/apks/4-browser/DisplayXR-Browser-[0-9]*-android-arm64.apk >/dev/null 2>&1; then
+            echo "browser release carries both asset names -- dropping the Preview copy"
+            rm -f "$b"/apks/4-browser/DisplayXR-Browser-Preview-*-android-arm64.apk
+          fi
 
           # Each demo comes from its own repo at its own pin: "<repo>|<tag>|<asset glob>".
           for e in \
@@ -221,7 +234,7 @@ jobs:
           one 'apks/1-cnsdk-services/device-service-release-*.apk'
           one 'apks/1-cnsdk-services/headTracking-service-release-*.apk'
           one "apks/2-displayxr-runtime/DisplayXR-Runtime-$V-*-android-arm64.apk"
-          one 'apks/4-browser/DisplayXR-Browser-Preview-*-android-arm64.apk'
+          one 'apks/4-browser/DisplayXR-Browser-*-android-arm64.apk'
           for g in DisplayXRAvatar DisplayXRGaussianSplat DisplayXRModelViewer DisplayXREarthView DisplayXRMediaPlayer; do
             one "apks/3-demos/$g-*.apk"
           done
