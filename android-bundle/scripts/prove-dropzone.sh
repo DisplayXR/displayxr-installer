@@ -27,7 +27,7 @@ TID=$(adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' | grep -oE 
 [ -n "${TID:-}" ] || { echo "could not find a task for $PKG"; exit 1; }
 adb logcat -c; adb shell am task resize "$TID" $DROP_BOUNDS >/dev/null 2>&1; sleep 8
 LOG=$(adb logcat -d | tr -d '\r')
-FRAMES=$(printf '%s\n' "$LOG" | grep -c 'PUBLISHED to CNSDK')
+FRAMES=$(weave_frames "$LOG")   # portable across core versions, see lib.sh
 SCALED2D=$(printf '%s\n' "$LOG" | grep -c 'CONTAINER_SCALED: .*presenting 2D')
 OFFPANEL=$(printf '%s\n' "$LOG" | grep -c 'OFF_PANEL_PLACEMENT')
 # Only NEGATIVE VkResults matter here. This panel returns VK_SUBOPTIMAL_KHR on every present

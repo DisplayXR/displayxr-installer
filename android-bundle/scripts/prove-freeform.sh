@@ -82,7 +82,7 @@ DESTROY=$(printf '%s\n' "$LOG" | grep -c 'APP_CMD_DESTROY')
 TOGGLED=$(printf '%s\n' "$LOG" | grep -cE 'startActivityFromRecentsForWR|toggleSwitchFromFullScreenToFreeformWr')
 OLDBUG=$(printf '%s\n' "$LOG" | grep -cE 'Attempted to set replacing window on app token with no content|APP TRANSITION TIMEOUT')
 [ "$TOGGLED" -gt 0 ] || adb exec-out screencap -p > "/tmp/freeform-miss-$(date +%H%M%S).png" 2>/dev/null   # tap probably missed the icon
-adb logcat -c; sleep 5; FRAMES=$(adb logcat -d | tr -d '\r' | grep -c 'PUBLISHED to CNSDK')
+adb logcat -c; sleep 5; FRAMES=$(weave_frames "$(adb logcat -d | tr -d '\r')")   # portable across core versions, see lib.sh
 # From runtime v2.16.12 the runtime says what it does in a scaled container (spec R6/S8/S9).
 printf '%s\n' "$LOG" | grep -E 'CONTAINER_SCALED|lens preference (RELEASED|ASSERTED)' | sed -E 's/^[^A-Za-z\[]*//;s/^.*WARN \[[a-z_]+\] //' | awk '!seen[$0]++' | cut -c1-160 | sed 's/^/  runtime: /'
 echo "  after:  pid=${PID1:-<dead>} $M1  WM-toggle=$TOGGLED  APP_CMD_DESTROY=$DESTROY  old-bug-signature=$OLDBUG  frames/5s=$FRAMES"

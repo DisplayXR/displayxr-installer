@@ -154,6 +154,25 @@ Note for whoever validates a bundle: `adb install` + `monkey` do not reproduce a
 our pads carry `/data/local/tmp/chrome-command-line`, which testers do not — so a build can pass
 every scripted check here and still fail someone's first launch.
 
+### 3d. On a Lume Phone: exempt the runtime from the OEM's app management
+
+Symptom: demos work, but **the browser shows no 3D**. Its log says
+
+    blockingConnect(org.freedesktop.monado.openxr_runtime.out_of_process) refused: -1
+
+The demos run the runtime in-process; the browser is the only app that reaches it as a
+separate service, so a browser-only failure with every demo fine is the signature of this.
+The phone's OEM power management (`CpuFreezerManagerServiceV2`) targets the runtime, and a
+frozen process cannot answer a bind.
+
+By hand: **Settings → Battery → app management → DisplayXR runtime → Unrestricted**, and the
+same for the browser. Measured 2026-09-11: setting the AOSP battery-optimisation exemption
+over adb fixes the bind immediately (registration goes `clients=0/32` → `1/32`) but **does not
+persist** — the entries were gone again within the session. The OEM's own setting is the
+durable one.
+
+Not seen on the NP02J or the Lume Pad 2; both have more headroom and neither is targeted.
+
 ### 4. UNINSTALL any older DisplayXR Browser before installing this one
 
 **This bundle ships a RELEASE-SIGNED browser (0.1.28; every build since 0.1.25 is).** Every build up to
