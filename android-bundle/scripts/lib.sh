@@ -160,3 +160,24 @@ require_pad() {
     echo "  driving a pad someone else is measuring destroys their run and yours." >&2
     exit 1
 }
+
+# Count weave frames in a way that works on BOTH CNSDK core generations.
+#
+# `PUBLISHED to CNSDK` is the forward-horizon publish marker and it only exists
+# when the core implements the predicted-scanout sink. On an older core the log
+# says `#206: weave-time horizon NN ms -> sink ABSENT (stock core; publisher
+# half verified)` and the marker NEVER appears -- measured on a Lume Pad 2 on
+# factory services 0.8.20, which wove happily at 41/s while this read 0. The
+# gate in prove-freeform fails on FRAMES<=0, so that device would have been
+# declared broken by a harness that was merely counting the wrong thing.
+#
+# `leia_cnsdk_weave` fires once per weave regardless of core version. On a
+# 0.10.68 core the two counts are identical (322 vs 322, measured on the Lume
+# Phone); on an old core only the second is non-zero. Take the max so the
+# number still means "weave frames" on every device.
+weave_frames() {
+    _log="$1"
+    _pub=$(printf '%s\n' "$_log" | grep -c 'PUBLISHED to CNSDK')
+    _wev=$(printf '%s\n' "$_log" | grep -c 'leia_cnsdk_weave')
+    [ "$_wev" -gt "$_pub" ] && echo "$_wev" || echo "$_pub"
+}
