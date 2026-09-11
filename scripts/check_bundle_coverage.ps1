@@ -52,6 +52,7 @@ $sh  = Get-Content -Raw $shPath
 # once, and nobody remembers why".
 $IntentionallyUnbundled = @{
     browser = 'Opt-in only (setup-displayxr --with browser): the preview is rebased ~monthly onto Chrome stable but is NOT patched to Chrome mid-cycle security releases, so it must not ride the default install. Its tags are preview-X.Y.Z, so versions-bump validates its shape separately too.'
+      cnsdk_services = 'Android only, and not installable by setup-displayxr at all: it pins the pair of CNSDK display-service APKs on the PRIVATE repo LeiaInc/CNSDK, fetched with LEIALOFT_GITHUB_TOKEN by build-android-bundle.yml to assemble the Android tablet bundle. The desktop bundle is Windows/macOS installers and has no Android lane to chain it into. This is the pin that made versions.json membership mean "desktop orchestrator installs it OR a platform bundle pins it".'
 }
 
 # Every property except the JSON-schema pointer is a pinned component.
