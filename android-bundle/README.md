@@ -118,6 +118,27 @@ One driver at a time, coordinated through `/data/local/tmp/pad.lock` holding
 never free. Remove only your own entry, with `rm` — truncating leaves exactly that ambiguous state.
 `pad-lock.sh` enforces all of this.
 
+**That one line is the format. Never hand-write the lock.** `pad-lock.sh take` is the only writer,
+and it is the only thing that claims the lock atomically — it creates with `set -C`, so two sessions
+racing cannot both succeed, and it reads the lock back and refuses unless the lock is actually
+yours. A hand-written `echo > pad.lock` does neither, and on 2026-09-12 one destroyed a claim made
+17 seconds earlier; the session that did it had not read the file first, because `pad-lock.sh` was
+not on its `PATH` and it did not go looking. The same session also wrote a four-line
+`holder=`/`taken=`/`task=` form, which every reader mis-parsed as a handle three lines long — that
+left the *holder* unable to release its own lock and unable to pass its own `require_pad`, with
+nobody else permitted to clear the entry. Readers tolerate that shape (`pad_holder` in `lib.sh`) so a
+stale one cannot strand the pad, but it is not a second supported format.
+
+**It is not on your `PATH`, and that is how the clobber happened.** These scripts live in this repo,
+while the work usually happens in a sibling checkout, so call it by path rather than improvising:
+
+```
+"$(git -C <your checkout> rev-parse --show-toplevel)/../displayxr-installer/android-bundle/scripts/pad-lock.sh" status
+```
+
+or `alias padlock=.../android-bundle/scripts/pad-lock.sh` for the session. Reaching for `echo` because
+the tool is two directories away is the failure this paragraph exists to prevent.
+
 Leave the tablet's rotation **unlocked** at rest (auto-rotate on, landscape current). Pin it only
 for the duration of a run; every script restores it on exit, including on failure.
 
