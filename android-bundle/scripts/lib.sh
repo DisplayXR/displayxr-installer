@@ -142,6 +142,11 @@ ver() { adb shell dumpsys package "$1" 2>/dev/null | tr -d '\r' | grep -m1 versi
 # here can. Every script that CHANGES device state calls this first.
 #
 # Export PAD_HANDLE=<your handle> when you hold the lock, so your own runs pass.
+#
+# Refuses with exit 1 by default. Set PAD_REFUSE_RC=75 (EX_TEMPFAIL) to say "blocked, try
+# later" instead of "this run is broken" -- pad-run.sh does, so a caller waiting for the pad
+# can tell a held lock apart from a real failure and loop on it. The distinction only exists
+# because both outcomes previously looked identical to a script.
 require_pad() {
     _pl=/data/local/tmp/pad.lock
     _ex=$(adb shell "test -e $_pl && echo yes || echo no" 2>/dev/null | tr -d '\r')
@@ -150,7 +155,7 @@ require_pad() {
     if [ -z "$_lk" ]; then
         echo "  REFUSING: $_pl exists but is EMPTY -- that means held-by-unknown, never free." >&2
         echo "  Find out whose it is before touching this pad." >&2
-        exit 1
+        exit "${PAD_REFUSE_RC:-1}"
     fi
     _h=${_lk%% *}
     if [ -n "${PAD_HANDLE:-}" ] && [ "$_h" = "${PAD_HANDLE}" ]; then return 0; fi
@@ -158,7 +163,7 @@ require_pad() {
     echo "    lock: $_lk" >&2
     echo "  If that handle is you, re-run with PAD_HANDLE=$_h. Otherwise wait for them to release;" >&2
     echo "  driving a pad someone else is measuring destroys their run and yours." >&2
-    exit 1
+    exit "${PAD_REFUSE_RC:-1}"
 }
 
 # Count weave frames in a way that works on BOTH CNSDK core generations.
