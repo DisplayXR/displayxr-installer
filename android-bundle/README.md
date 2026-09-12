@@ -12,7 +12,7 @@ prevents. Please keep those comments when editing: they are the reason the check
 | # | Script | What it establishes |
 |---|---|---|
 | 1 | `check-artifacts.sh <expected-file>` | Every APK matches its release digest, the runtime's CNSDK stamps are right, and the bundled vendor plug-in embeds the strings that identify its version. Runs **before** anything is installed. |
-| 2 | `pad-lock.sh take <handle> <what>` | Claims the shared tablet. |
+| 2 | `pad-lock.sh take <handle> <what>` | Claims the shared tablet. Prefer `pad-run.sh` (below), which claims it, runs your command, and hands it back. |
 | 3 | `reset-to-virgin.sh --yes [--revert-services]` | Optional clean slate: removes every DisplayXR package, optionally reverts the vendor services to their factory builds, reboots. |
 | 4 | `install-from-computer.sh` | Installs in dependency order and performs the post-install steps that installs do not do. |
 | 5 | `audit-device.sh` | Reads what is *actually installed* — including the vendor core's own hash — and compares it with the bundle. Needs `adb root`. |
@@ -80,6 +80,33 @@ but the caller had not checked its exit status, so the run proceeded anyway and 
 session's app, cleared its recents and dropped its rotation pin mid-measurement. `audit-device.sh` is
 read-only and deliberately not gated; `install-on-tablet.sh` runs on-device with no `adb` and cannot
 check.
+
+### `pad-run.sh` — for anything that is not one of these scripts
+
+```
+./scripts/pad-run.sh <handle> "<purpose, duration>" -- <command...>
+./scripts/pad-run.sh mac/media3 "#71 phase 1, ~10 min" -- ./scripts/prove-3d.sh
+```
+
+`require_pad` only protects scripts that call it, and **it happened again on 2026-09-12** — a second
+session drove the pad under a live measurement, having gated *writing its own lock* and then run the
+device commands regardless. Neither collision was a `prove-*` script; both were ad-hoc `adb`
+one-liners, which a guard inside the harness cannot see. `pad-run.sh` can, because it owns the
+`exec`: nothing runs until the check passes. It refuses with **exit 75** (`EX_TEMPFAIL`, so a waiting
+caller can tell "retry later" from "broken"), takes the lock, runs the command, restores the resting
+rotation however the command exited, and releases the lock — only if it took it, so nesting cannot
+strand it. Put ad-hoc pad commands behind it; wrapping a `prove-*` script adds the lock handling and
+the audit trail below on top of that script's own `require_pad`.
+
+**It also snapshots who else used the device, and prints the delta on exit.** This is the half a lock
+cannot give you: a lock prevents a collision, it does not let you *audit* one afterwards. `logcat`
+rolls within minutes on this pad, so by the time you learn a peer touched it, the line naming what
+they did is gone — which on 2026-09-12 left a published measurement resting on file mtimes to infer
+ordering, and it had to be withdrawn. `dumpsys usagestats` keeps per-package `ACTIVITY_RESUMED` rows
+with wall-clock times long after `logcat` drops them, so the delta can still name a foreign launch
+after the fact. Any reading that keys on a client connect/disconnect — `cgroup.freeze`, `oom adj`,
+service lifetime — is invertible by **one** foreign app launch, so "my run looked clean" is not
+evidence that it was.
 
 One driver at a time, coordinated through `/data/local/tmp/pad.lock` holding
 `<handle> <ISO timestamp> <what, and for how long>`. An **empty** lock file means held-by-unknown,
