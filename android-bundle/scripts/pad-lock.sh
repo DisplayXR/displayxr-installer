@@ -7,7 +7,20 @@
 #   ./scripts/pad-lock.sh take "android-bundle" "0.10.68 four-way swap, ~20 min"
 #   ./scripts/pad-lock.sh release "android-bundle"
 set -u
-. "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/lib.sh"   # pad_holder
+# Resolve $0 through symlinks BEFORE locating lib.sh. link-pad-tools.sh puts a symlink to
+# this script on PATH, and for a symlink "dirname $0" is the link's directory -- which has no
+# lib.sh, so sourcing would fail and the tool would be unavailable exactly when someone
+# finally had it at hand. readlink -f is avoided: it is not portable to every BSD userland.
+_self="$0"
+while [ -L "$_self" ]; do
+    _link=$(readlink "$_self")
+    case "$_link" in
+        /*) _self="$_link" ;;
+        *)  _self="$(dirname -- "$_self")/$_link" ;;
+    esac
+done
+_HERE=$(CDPATH= cd -- "$(dirname -- "$_self")" && pwd)
+. "$_HERE/lib.sh"   # pad_holder
 L=/data/local/tmp/pad.lock
 read_lock() { adb shell "cat $L 2>/dev/null" | tr -d '\r'; }
 case "${1:-status}" in

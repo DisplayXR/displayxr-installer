@@ -46,7 +46,20 @@ shift 2
 shift
 [ $# -gt 0 ] || { echo "pad-run.sh: no command given" >&2; usage; }
 
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# Resolve $0 through symlinks BEFORE locating lib.sh. link-pad-tools.sh puts a symlink to
+# this script on PATH, and for a symlink "dirname $0" is the link's directory -- which has no
+# lib.sh, so sourcing would fail and the tool would be unavailable exactly when someone
+# finally had it at hand. readlink -f is avoided: it is not portable to every BSD userland.
+_self="$0"
+while [ -L "$_self" ]; do
+    _link=$(readlink "$_self")
+    case "$_link" in
+        /*) _self="$_link" ;;
+        *)  _self="$(dirname -- "$_self")/$_link" ;;
+    esac
+done
+_HERE=$(CDPATH= cd -- "$(dirname -- "$_self")" && pwd)
+HERE="$_HERE"
 . "$HERE/lib.sh"        # restore_rotation, require_pad, pad_holder
 command -v adb >/dev/null || { echo "pad-run.sh: adb not found." >&2; exit 1; }
 
