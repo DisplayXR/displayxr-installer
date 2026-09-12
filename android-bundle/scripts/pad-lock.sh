@@ -17,7 +17,28 @@ case "${1:-status}" in
   take)   h="${2:?handle}"; w="${3:-unspecified}"; v=$(read_lock)
           if adb shell "test -e $L" 2>/dev/null && [ -n "$v" ] && [ "$(pad_holder "$v")" != "$h" ]; then echo "REFUSING: held by someone else -> $v"; exit 1; fi
           if adb shell "test -e $L" 2>/dev/null && [ -z "$v" ]; then echo "REFUSING: empty lock file = held by unknown"; exit 1; fi
-          adb shell "echo '$h $(date -u +%Y-%m-%dT%H:%M:%SZ) $w' > $L"; echo "took: $(read_lock)" ;;
+          # Create ATOMICALLY when the lock is absent. The check above and the write below are
+          # two round trips to the device, and a second session can take the lock in between --
+          # a plain ">" then silently destroys their claim. That happened for real on
+          # 2026-09-12: one session's one-line lock was overwritten ~17s later by another's,
+          # and the victim only found out because they were told. `set -C` makes the redirect
+          # fail instead ("File exists"), verified on this device's /system/bin/sh.
+          # Refreshing a lock that is already OURS still needs a plain write.
+          _line="$h $(date -u +%Y-%m-%dT%H:%M:%SZ) $w"
+          if adb shell "test -e $L" 2>/dev/null; then
+              adb shell "echo '$_line' > $L"                 # already ours; checked above
+          else
+              adb shell "set -C; echo '$_line' > $L" >/dev/null 2>&1
+          fi
+          # Read back and PROVE it is ours. A lost race, a full filesystem or a read-only
+          # /data/local/tmp all leave the write silently ineffective, and "took:" printing
+          # someone else's lock is how a caller walks on to drive the pad anyway.
+          v=$(read_lock)
+          if [ "$(pad_holder "$v")" != "$h" ]; then
+              echo "REFUSING: could not take the lock; it now reads -> ${v:-<empty>}" >&2
+              exit 1
+          fi
+          echo "took: $v" ;;
   release) h="${2:?handle}"; v=$(read_lock)
           if [ -n "$v" ] && [ "$(pad_holder "$v")" != "$h" ]; then echo "REFUSING: not my entry -> $v"; exit 1; fi
           adb shell "rm -f $L"; echo "released" ;;
