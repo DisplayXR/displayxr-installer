@@ -47,7 +47,7 @@ shift
 [ $# -gt 0 ] || { echo "pad-run.sh: no command given" >&2; usage; }
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-. "$HERE/lib.sh"        # restore_rotation, require_pad
+. "$HERE/lib.sh"        # restore_rotation, require_pad, pad_holder
 command -v adb >/dev/null || { echo "pad-run.sh: adb not found." >&2; exit 1; }
 
 # Step 1. Refuse before anything is executed. PAD_HANDLE lets require_pad pass a lock that is
@@ -60,11 +60,12 @@ PAD_REFUSE_RC=75 require_pad
 # stays in one place.
 HELD_BEFORE=$(adb shell "cat $LOCK 2>/dev/null" | tr -d '\r')
 TOOK=no
-case "$HELD_BEFORE" in
-  "$HANDLE "*) echo "pad-run: lock already held by $HANDLE; leaving it in place on exit." ;;
-  *) "$HERE/pad-lock.sh" take "$HANDLE" "$PURPOSE" || exit 75
-     TOOK=yes ;;
-esac
+if [ "$(pad_holder "$HELD_BEFORE")" = "$HANDLE" ]; then
+    echo "pad-run: lock already held by $HANDLE; leaving it in place on exit."
+else
+    "$HERE/pad-lock.sh" take "$HANDLE" "$PURPOSE" || exit 75
+    TOOK=yes
+fi
 
 OUT="${PAD_RUN_OUT:-$(mktemp -d)}"
 mkdir -p "$OUT"
@@ -87,13 +88,12 @@ finish() {
         comm -13 <(sort -u "$OUT/usage.before" 2>/dev/null) <(sort -u "$OUT/usage.after" 2>/dev/null) \
           | sed 's/^/  /' | head -40
     fi
-    # case, not grep: the handle would be a REGEX to grep. Today's handles are all
-    # [a-z0-9/_-] so it would not bite, but a handle with a dot or a + would silently
-    # match the wrong lock, and this line's whole job is to notice a wrong lock.
-    case "$(adb shell "cat $LOCK 2>/dev/null" | tr -d '\r')" in
-      "$HANDLE "*) ;;
-      *) echo "pad-run: WARNING -- the lock is no longer yours; someone overwrote it mid-run." ;;
-    esac
+    # pad_holder, not grep: grep would treat the handle as a REGEX, and it also has to cope
+    # with both on-device lock formats (see lib.sh). Noticing a WRONG lock is this line's
+    # whole job, so it must not mis-parse a valid one.
+    if [ "$(pad_holder "$(adb shell "cat $LOCK 2>/dev/null" | tr -d '\r')")" != "$HANDLE" ]; then
+        echo "pad-run: WARNING -- the lock is no longer yours; someone overwrote it mid-run."
+    fi
     # Restore ONLY if this invocation took the lock. In the nesting case (TOOK=no) the
     # outer run may have pinned landscape deliberately, and restore_rotation UNPINS --
     # so restoring here would drop the outer run's pin mid-measurement, silently. That is

@@ -132,6 +132,33 @@ open_mediaplayer_file() {
 # and reset-to-virgin.sh now PRINT versions without the leading v (2.16.23, not v2.16.23).
 ver() { adb shell dumpsys package "$1" 2>/dev/null | tr -d '\r' | grep -m1 versionName | cut -d= -f2 | tr -d ' ' | sed 's/^v//'; }
 
+# The handle holding the pad lock, from EITHER on-device lock format.
+#
+# The agreed format is one line, "<handle> <ISO ts> <what>". On 2026-09-12 a session started
+# writing a four-line structured lock instead:
+#
+#     holder=mac/immersive-vr
+#     taken=2026-09-12T08:45:00Z
+#     task=...
+#     artifact=...
+#
+# Every consumer here took the handle as "everything up to the first space", which on the
+# structured form yields the whole first three lines. The consequences are worse than a
+# cosmetic mis-parse, and both bite the LEGITIMATE holder rather than an intruder:
+# require_pad refuses the holder's own runs, and pad-lock.sh release refuses to remove the
+# holder's own lock ("not my entry") -- a stuck lock nobody may clear, since clearing another
+# handle's entry is forbidden. A holder who cannot pass their own gate starts bypassing the
+# gate, which is exactly how the two collisions this harness exists to prevent happened.
+#
+# So parse both rather than litigate which is correct. Writers still emit the one-line form.
+pad_holder() {
+    _first=$(printf '%s\n' "${1:-}" | head -1 | tr -d '\r')
+    case "$_first" in
+        holder=*) printf '%s' "${_first#holder=}" ;;
+        *)        printf '%s' "${_first%% *}" ;;
+    esac
+}
+
 # Refuse to drive the pad when another handle holds the lock.
 #
 # The lock used to be purely ADVISORY: pad-lock.sh would refuse to hand it over, but a
@@ -157,7 +184,7 @@ require_pad() {
         echo "  Find out whose it is before touching this pad." >&2
         exit "${PAD_REFUSE_RC:-1}"
     fi
-    _h=${_lk%% *}
+    _h=$(pad_holder "$_lk")
     if [ -n "${PAD_HANDLE:-}" ] && [ "$_h" = "${PAD_HANDLE}" ]; then return 0; fi
     echo "  REFUSING: the pad is held by another handle." >&2
     echo "    lock: $_lk" >&2
