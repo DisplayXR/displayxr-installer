@@ -57,11 +57,29 @@ fi
   && echo "  note: the checkout is dirty outside android-bundle/ -- does not affect the harness, continuing"
 
 BRANCH="$(git -C "$REPO" rev-parse --abbrev-ref HEAD)"
+# Refuse to ship from a branch. A checkout left on a feature branch by someone
+# mid-review will happily sync UNREVIEWED scripts into a bundle that then goes
+# to a tester -- measured 2026-09-11, a checkout sitting on feat/android-bundle-ci
+# was 13 commits behind main and synced from it without complaint, because this
+# script only WARNED about being behind and never looked at which branch it was
+# on. A warning is not enough when the output is a shipped artifact.
+if [ "$BRANCH" != main ] && [ "${DXR_SYNC_ALLOW_BRANCH:-0}" != 1 ]; then
+    die "$REPO is on branch '$BRANCH', not main.
+   Syncing from a branch ships scripts nobody has reviewed.
+   git -C \"$REPO\" checkout main && git -C \"$REPO\" pull
+   (or DXR_SYNC_ALLOW_BRANCH=1 to override, deliberately)"
+fi
 SHA="$(git -C "$REPO" rev-parse --short HEAD)"
 SUBJ="$(git -C "$REPO" log -1 --pretty=%s)"
 if git -C "$REPO" rev-parse --verify -q origin/main >/dev/null; then
   BEHIND="$(git -C "$REPO" rev-list --count HEAD..origin/main 2>/dev/null || echo 0)"
-  [ "${BEHIND:-0}" -gt 0 ] && echo "  note: checkout is $BEHIND commit(s) behind origin/main -- 'git -C \"$REPO\" pull' for the newest harness"
+  # Behind main is also a refusal, not a note: the bundle would ship stale gates.
+  # Overridable for the offline case where you deliberately want a known state.
+  if [ "${BEHIND:-0}" -gt 0 ] && [ "${DXR_SYNC_ALLOW_BEHIND:-0}" != 1 ]; then
+      die "$REPO is $BEHIND commit(s) behind origin/main -- the bundle would ship stale scripts.
+   git -C \"$REPO\" pull
+   (or DXR_SYNC_ALLOW_BEHIND=1 to sync a deliberately older state)"
+  fi
 fi
 
 SELF_DRIFTED=0
