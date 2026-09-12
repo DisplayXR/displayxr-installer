@@ -5,6 +5,10 @@
 #   ./scripts/pad-run.sh mac/media3 "#71 phase 1, ~10 min" -- ./scripts/prove-3d.sh
 #   ./scripts/pad-run.sh runtime-wake "thaw proof" -- adb shell am start -n pkg/.Main
 #
+# Set PAD_RUN_OUT to your session's scratch directory. It defaults to a mktemp -d under
+# /tmp, which is the one place the after-the-fact evidence should NOT live -- it is the
+# only record of a contaminated window once logcat has rolled.
+#
 # WHY THIS EXISTS. The lock was advisory twice over. pad-lock.sh refuses to hand the lock to
 # a second holder, and require_pad refuses to drive the pad -- but both only protect scripts
 # that ASK. Two sessions in three days drove the pad under another session's live measurement,
@@ -83,10 +87,22 @@ finish() {
         comm -13 <(sort -u "$OUT/usage.before" 2>/dev/null) <(sort -u "$OUT/usage.after" 2>/dev/null) \
           | sed 's/^/  /' | head -40
     fi
-    adb shell "cat $LOCK 2>/dev/null" | tr -d '\r' | grep -q "^$HANDLE " \
-      || echo "pad-run: WARNING -- the lock is no longer yours; someone overwrote it mid-run."
-    restore_rotation
-    [ "$TOOK" = yes ] && "$HERE/pad-lock.sh" release "$HANDLE"
+    # case, not grep: the handle would be a REGEX to grep. Today's handles are all
+    # [a-z0-9/_-] so it would not bite, but a handle with a dot or a + would silently
+    # match the wrong lock, and this line's whole job is to notice a wrong lock.
+    case "$(adb shell "cat $LOCK 2>/dev/null" | tr -d '\r')" in
+      "$HANDLE "*) ;;
+      *) echo "pad-run: WARNING -- the lock is no longer yours; someone overwrote it mid-run." ;;
+    esac
+    # Restore ONLY if this invocation took the lock. In the nesting case (TOOK=no) the
+    # outer run may have pinned landscape deliberately, and restore_rotation UNPINS --
+    # so restoring here would drop the outer run's pin mid-measurement, silently. That is
+    # the exact failure class this wrapper exists to prevent. The outermost invocation
+    # owns the lock and restores on its own exit.
+    if [ "$TOOK" = yes ]; then
+        restore_rotation
+        "$HERE/pad-lock.sh" release "$HANDLE"
+    fi
     exit "$_rc"
 }
 trap finish EXIT INT TERM

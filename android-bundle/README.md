@@ -84,9 +84,13 @@ check.
 ### `pad-run.sh` — for anything that is not one of these scripts
 
 ```
-./scripts/pad-run.sh <handle> "<purpose, duration>" -- <command...>
-./scripts/pad-run.sh mac/media3 "#71 phase 1, ~10 min" -- ./scripts/prove-3d.sh
+PAD_RUN_OUT=<your scratch dir> ./scripts/pad-run.sh <handle> "<purpose, duration>" -- <command...>
+PAD_RUN_OUT=/path/to/scratch  ./scripts/pad-run.sh mac/media3 "#71 phase 1, ~10 min" -- ./scripts/prove-3d.sh
 ```
+
+Pass `PAD_RUN_OUT`. It defaults to a `mktemp -d` under `/tmp`, which is the one place the
+after-the-fact evidence should *not* live — it is the only record of a contaminated window once
+`logcat` has rolled.
 
 `require_pad` only protects scripts that call it, and **it happened again on 2026-09-12** — a second
 session drove the pad under a live measurement, having gated *writing its own lock* and then run the
@@ -95,7 +99,8 @@ one-liners, which a guard inside the harness cannot see. `pad-run.sh` can, becau
 `exec`: nothing runs until the check passes. It refuses with **exit 75** (`EX_TEMPFAIL`, so a waiting
 caller can tell "retry later" from "broken"), takes the lock, runs the command, restores the resting
 rotation however the command exited, and releases the lock — only if it took it, so nesting cannot
-strand it. Put ad-hoc pad commands behind it; wrapping a `prove-*` script adds the lock handling and
+strand it. Rotation is restored on the same condition: `restore_rotation` *unpins*, so an inner
+wrapper restoring it would drop an outer run's deliberate landscape pin mid-measurement. Put ad-hoc pad commands behind it; wrapping a `prove-*` script adds the lock handling and
 the audit trail below on top of that script's own `require_pad`.
 
 **It also snapshots who else used the device, and prints the delta on exit.** This is the half a lock
