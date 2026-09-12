@@ -38,10 +38,18 @@ case "${1:-status}" in
           # fail instead ("File exists"), verified on this device's /system/bin/sh.
           # Refreshing a lock that is already OURS still needs a plain write.
           _line="$h $(date -u +%Y-%m-%dT%H:%M:%SZ) $w"
+          # Escape single quotes for the DEVICE shell. The line is interpolated into
+          # adb shell "echo '...'", so one apostrophe in the reason ends the quoting and
+          # the write silently produces nothing -- a caller passing "test 2's run" got an
+          # EMPTY lock file, which then correctly reads back as held-by-unknown. The
+          # read-back guard below caught it, which is the only reason it was not a stranded
+          # lock; the write should not have been able to fail that way in the first place.
+          # Standard sh idiom: ' -> '\'' .
+          _esc=$(printf '%s' "$_line" | sed "s/'/'\\\\''/g")
           if adb shell "test -e $L" 2>/dev/null; then
-              adb shell "echo '$_line' > $L"                 # already ours; checked above
+              adb shell "echo '$_esc' > $L"                  # already ours; checked above
           else
-              adb shell "set -C; echo '$_line' > $L" >/dev/null 2>&1
+              adb shell "set -C; echo '$_esc' > $L" >/dev/null 2>&1
           fi
           # Read back and PROVE it is ours. A lost race, a full filesystem or a read-only
           # /data/local/tmp all leave the write silently ineffective, and "took:" printing
