@@ -50,6 +50,41 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$HERE/lib.sh"        # restore_rotation, require_pad, pad_holder
 command -v adb >/dev/null || { echo "pad-run.sh: adb not found." >&2; exit 1; }
 
+# WHICH DEVICE. The lock lives on the device, so a lock is inherently that device's -- but
+# nothing stopped a run from driving a DIFFERENT device than the operator believed. On
+# 2026-09-12 the USB cable was moved from the tablet to the phone mid-session; three sessions
+# then read a lock none of them had written, spent an hour on push-vs-clock-drift theories,
+# and one of them (me) published two wrong explanations. `ro.product.model` cannot save you
+# either: it reads the same on more than one of these units.
+#
+# So: set PAD_SERIAL to the serial you intend to drive and this refuses anything else. No
+# serials are hardcoded here -- this is a public repo, and a serial is a device identifier
+# that does not belong in it. `adb devices -l` prints yours.
+_attached=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
+_n=$(printf '%s\n' "$_attached" | grep -c . || true)
+if [ -n "${PAD_SERIAL:-}" ]; then
+    if ! printf '%s\n' "$_attached" | grep -qx "$PAD_SERIAL"; then
+        echo "pad-run.sh: PAD_SERIAL=$PAD_SERIAL is not attached (attached: ${_attached:-none})." >&2
+        echo "  Refusing rather than driving a device you did not mean to." >&2
+        exit 1
+    fi
+    export ANDROID_SERIAL="$PAD_SERIAL"
+elif [ "$_n" -gt 1 ]; then
+    # Ambiguous: adb would pick for us, and "adb: more than one device" failures mid-run are
+    # worse than refusing up front.
+    echo "pad-run.sh: $_n devices attached and PAD_SERIAL is unset:" >&2
+    printf '%s\n' "$_attached" | sed 's/^/    /' >&2
+    echo "  Set PAD_SERIAL to the one you mean." >&2
+    exit 1
+elif [ "$_n" -eq 0 ]; then
+    echo "pad-run.sh: no device attached." >&2
+    exit 1
+else
+    # Exactly one device: name it in the log, so the transcript records WHICH device the
+    # measurement came from. An unattributed measurement is what made today expensive.
+    export ANDROID_SERIAL="$_attached"
+fi
+
 # Step 1. Refuse before anything is executed. PAD_HANDLE lets require_pad pass a lock that is
 # already ours; PAD_REFUSE_RC makes a held lock exit 75 instead of 1.
 LOCK=/data/local/tmp/pad.lock
@@ -69,6 +104,13 @@ fi
 
 OUT="${PAD_RUN_OUT:-$(mktemp -d)}"
 mkdir -p "$OUT"
+# Drop any snapshots left by a previous run in this directory. SIGKILL is untrappable, so a
+# killed run leaves its "before" written and its "after" missing -- and if the directory is
+# reused, the NEXT run's fresh "before" sits next to the PREVIOUS run's stale "after". Anyone
+# reading the pair then computes a delta across two different runs and sees contamination
+# that never happened. Measured: a planted row survived into the next run's directory exactly
+# that way. Named files only, never the directory, which the caller may share.
+rm -f "$OUT/usage.before" "$OUT/usage.after" "$OUT/recents.before" "$OUT/recents.after"
 # stderr is discarded for the whole pipeline, not just adb: the snapshot has no diagnostics
 # worth keeping, and a missing dumpsys must not derail a teardown.
 snap() { { adb shell dumpsys usagestats | tr -d '\r' \
@@ -124,6 +166,7 @@ trap finish EXIT INT TERM HUP PIPE
 
 snap before
 echo "pad-run: $HANDLE -- $PURPOSE"
+echo "pad-run: device $ANDROID_SERIAL ($(adb shell getprop ro.product.name 2>/dev/null | tr -d '\r'))"
 echo "pad-run: audit trail in $OUT"
 
 "$@"

@@ -92,6 +92,17 @@ Pass `PAD_RUN_OUT`. It defaults to a `mktemp -d` under `/tmp`, which is the one 
 after-the-fact evidence should *not* live — it is the only record of a contaminated window once
 `logcat` has rolled.
 
+**Pass `PAD_SERIAL` too, and say which device a measurement came from.** A lock lives on the
+device, so it is inherently that device's — but nothing stopped a run from driving a *different*
+device than you believed. On 2026-09-12 the USB cable moved from the tablet to the phone
+mid-session; three sessions then read a lock none of them had written and spent an hour on
+push-and-clock-drift theories before anyone checked `adb devices`. `ro.product.model` does not
+save you: it reads the same on more than one of these units, so `ro.product.name` or the serial
+is the discriminator. `pad-run.sh` refuses a `PAD_SERIAL` that is not attached, refuses when
+several devices are attached and none is named, and prints the serial it is driving so the
+transcript carries attribution. No serials are written down here — this is a public repo, and
+`adb devices -l` prints yours.
+
 `require_pad` only protects scripts that call it, and **it happened again on 2026-09-12** — a second
 session drove the pad under a live measurement, having gated *writing its own lock* and then run the
 device commands regardless. Neither collision was a `prove-*` script; both were ad-hoc `adb`
