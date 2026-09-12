@@ -69,17 +69,27 @@ fi
 
 OUT="${PAD_RUN_OUT:-$(mktemp -d)}"
 mkdir -p "$OUT"
-snap() { adb shell dumpsys usagestats 2>/dev/null | tr -d '\r' \
-           | grep -oE 'time="[^"]+" type=ACTIVITY_RESUMED package=[^ ]+' > "$OUT/usage.$1" 2>/dev/null || true
-         adb shell dumpsys activity recents 2>/dev/null | tr -d '\r' > "$OUT/recents.$1" 2>/dev/null || true; }
-snap before
-echo "pad-run: $HANDLE -- $PURPOSE"
-echo "pad-run: audit trail in $OUT"
+# stderr is discarded for the whole pipeline, not just adb: the snapshot has no diagnostics
+# worth keeping, and a missing dumpsys must not derail a teardown.
+snap() { { adb shell dumpsys usagestats | tr -d '\r' \
+             | grep -oE 'time="[^"]+" type=ACTIVITY_RESUMED package=[^ ]+' > "$OUT/usage.$1"; } 2>/dev/null || true
+         { adb shell dumpsys activity recents | tr -d '\r' > "$OUT/recents.$1"; } 2>/dev/null || true; }
 
-# Step 3+4. Teardown runs however the command exits, including a signal.
+# Steps 3+4. Teardown runs however the command exits, including a signal.
+#
+# ARM THIS BEFORE THE FIRST WRITE TO STDOUT. Measured the hard way: the informational echoes
+# used to come before the trap, and piping pad-run into `head -1` closed the pipe after the
+# first line -- so the next echo took an untrapped SIGPIPE and killed the script with the
+# lock already taken, STRANDING it on the device. A stranded lock is the worst thing this
+# tool can do, because nobody else may clear another handle's entry. Piping the output is an
+# obvious thing to do, so every line that writes to stdout must already be protected.
 finish() {
     _rc=$?
-    trap - EXIT INT TERM
+    trap - EXIT INT TERM HUP
+    # IGNORE PIPE rather than resetting it: with PIPE reset, finish's own first echo writes
+    # to the already-closed pipe, takes a second SIGPIPE and dies before releasing. Ignoring
+    # turns those writes into harmless EPIPE errors (nothing here runs under set -e).
+    trap "" PIPE
     snap after
     echo "pad-run: activities resumed during this run (anything not yours is contamination):"
     # Only the rows that are NEW since the start. A package you did not launch appearing here
@@ -94,17 +104,26 @@ finish() {
     if [ "$(pad_holder "$(adb shell "cat $LOCK 2>/dev/null" | tr -d '\r')")" != "$HANDLE" ]; then
         echo "pad-run: WARNING -- the lock is no longer yours; someone overwrote it mid-run."
     fi
-    # Restore ONLY if this invocation took the lock. In the nesting case (TOOK=no) the
-    # outer run may have pinned landscape deliberately, and restore_rotation UNPINS --
-    # so restoring here would drop the outer run's pin mid-measurement, silently. That is
-    # the exact failure class this wrapper exists to prevent. The outermost invocation
-    # owns the lock and restores on its own exit.
+    # Restore ONLY if this invocation took the lock. In the nesting case (TOOK=no) the outer
+    # run may have pinned landscape deliberately, and restore_rotation UNPINS -- so restoring
+    # here would drop the outer run's pin mid-measurement, silently. That is the exact failure
+    # class this wrapper exists to prevent. The outermost invocation owns the lock and restores
+    # on its own exit.
     if [ "$TOOK" = yes ]; then
-        restore_rotation
+        # 2>/dev/null because finish() ignores SIGPIPE and children inherit that: the helper
+        # pipes into `grep -m1`, which exits after the first match, so the upstream `tr` no
+        # longer dies silently on the closed pipe -- it prints "tr: stdout: Broken pipe" on
+        # every single run. Its stdout (the "rotation restored" line, with the verification
+        # numbers) is what matters and is kept.
+        restore_rotation 2>/dev/null
         "$HERE/pad-lock.sh" release "$HANDLE"
     fi
     exit "$_rc"
 }
-trap finish EXIT INT TERM
+trap finish EXIT INT TERM HUP PIPE
+
+snap before
+echo "pad-run: $HANDLE -- $PURPOSE"
+echo "pad-run: audit trail in $OUT"
 
 "$@"
