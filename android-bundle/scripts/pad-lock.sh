@@ -23,6 +23,84 @@ _HERE=$(CDPATH= cd -- "$(dirname -- "$_self")" && pwd)
 . "$_HERE/lib.sh"   # pad_holder
 L=/data/local/tmp/pad.lock
 read_lock() { adb shell "cat $L 2>/dev/null" | tr -d '\r'; }
+
+# Report whether a foreign lock meets the four-step clearable rule (issue #56).
+#
+# READ-ONLY ON PURPOSE. It clears nothing and cannot. Steps 1 and 3 are mechanical
+# and checked here; steps 2 and 4 need a human or agent and are printed as
+# instructions. The rule exists because AGE ALONE IS NEVER SUFFICIENT: on
+# 2026-09-12 three sessions judged a 3.5-hour-old lock dead, and it was live --
+# on a different device that had been swapped onto the cable.
+stale_check() {
+    _want="${1:-}"
+    # A DEVICE must be attached before anything below means anything. Without this the
+    # no-device case reads "no lock on this device", which would convince an operator a
+    # lock had gone when they simply were not talking to the pad -- the same shape as the
+    # 2026-09-12 cable swap, where the evidence and the lock came from different units.
+    _att=$(adb devices | awk 'NR>1 && $2=="device" {print $1}')
+    _n=$(printf '%s\n' "$_att" | grep -c . || true)
+    if [ "$_n" -eq 0 ]; then echo "UNKNOWN: no device attached -- cannot evaluate any step"; return 2; fi
+    if [ "$_n" -gt 1 ] && [ -z "${PAD_SERIAL:-}" ]; then
+        echo "UNKNOWN: $_n devices attached and PAD_SERIAL unset -- which pad do you mean?"; return 2
+    fi
+    _lk=$(read_lock)
+    if ! adb shell "test -e $L" 2>/dev/null; then echo "NOT CLEARABLE: no lock on this device"; return 1; fi
+    if [ -z "$_lk" ]; then echo "NOT CLEARABLE: empty lock file (held-by-unknown) -- a human must resolve this"; return 1; fi
+    _h=$(pad_holder "$_lk")
+    if [ -n "$_want" ] && [ "$_h" != "$_want" ]; then
+        echo "NOT CLEARABLE: lock is held by '$_h', not '$_want'"; return 1
+    fi
+
+    # Step 1 -- device identity. The lock and every piece of evidence below must come
+    # from the SAME unit. ro.product.model cannot discriminate these units; the serial can.
+    _serial=$(adb shell getprop ro.serialno 2>/dev/null | tr -d '\r')
+    _name=$(adb shell getprop ro.product.name 2>/dev/null | tr -d '\r')
+    if [ -n "${PAD_SERIAL:-}" ] && [ "$PAD_SERIAL" != "$_serial" ]; then
+        echo "NOT CLEARABLE: step 1 -- attached serial $_serial is not PAD_SERIAL=$PAD_SERIAL"; return 1
+    fi
+    echo "  step 1 OK   device $_serial ($_name)"
+
+    # Step 3 -- no device activity, and the lock has not been touched, for 30 min past
+    # the lock's own stated duration. Compare EPOCH SECONDS: usagestats prints device-local
+    # time, the lock line is UTC, and this box is UTC-7. Comparing the printed strings is
+    # how you get a seven-hour error that looks plausible.
+    _mtime=$(adb shell stat -c %Y "$L" 2>/dev/null | tr -d '\r')
+    _now=$(adb shell date +%s 2>/dev/null | tr -d '\r')
+    case "$_mtime$_now" in *[!0-9]*|'') echo "NOT CLEARABLE: step 3 -- cannot read device clock/mtime"; return 1 ;; esac
+    _idle=$(( _now - _mtime ))
+    # Stated duration, e.g. "~15min" / "20 min" / "2h"; absent means 30 min.
+    _dur=$(printf '%s' "$_lk" | grep -oE '[0-9]+ *(min|m|h|hour)' | head -1)
+    _durs=1800
+    case "$_dur" in
+        *h*|*hour*) _durs=$(( $(printf '%s' "$_dur" | grep -oE '[0-9]+') * 3600 )) ;;
+        *m*)        _durs=$(( $(printf '%s' "$_dur" | grep -oE '[0-9]+') * 60 )) ;;
+    esac
+    _need=$(( _durs + 1800 ))
+    if [ "$_idle" -lt "$_need" ]; then
+        echo "NOT CLEARABLE: step 3 -- lock untouched for ${_idle}s, need ${_need}s (stated ${_dur:-none} + 30 min)"
+        return 1
+    fi
+    _resumed=$(adb shell dumpsys usagestats 2>/dev/null | tr -d '\r' \
+                 | grep -c "type=ACTIVITY_RESUMED" 2>/dev/null || echo 0)
+    echo "  step 3 OK   lock untouched ${_idle}s (>= ${_need}s); usagestats rows present: $_resumed"
+    echo "              CHECK THOSE ROWS YOURSELF for activity inside your window -- this"
+    echo "              counts them, it cannot know which window you care about."
+
+    echo "CLEARABLE (steps 1 and 3 only) -- holder '$_h'"
+    echo
+    echo "  STEP 2, yours to do, NOT checked here:"
+    echo "    ListAgents on this box shows no session answering '$_h', AND a message to any"
+    echo "    plausible owner has gone unanswered for 10 minutes. Liveness of the holder"
+    echo "    SESSION is the signal -- never liveness of a process on the device. A frozen"
+    echo "    runtime is alive, has a ServiceRecord, and does nothing."
+    echo
+    echo "  STEP 4, yours to do:"
+    echo "    post this line verbatim (bus or issue) before clearing:"
+    echo "      $_lk"
+    echo "    then take the lock in the same command with purpose 'cleared stale $_h'."
+    return 0
+}
+
 case "${1:-status}" in
   status) v=$(read_lock)
           if adb shell "test -e $L" 2>/dev/null; then [ -n "$v" ] && echo "HELD: $v" || echo "HELD by unknown (empty file) — do not take it"
@@ -63,5 +141,6 @@ case "${1:-status}" in
   release) h="${2:?handle}"; v=$(read_lock)
           if [ -n "$v" ] && [ "$(pad_holder "$v")" != "$h" ]; then echo "REFUSING: not my entry -> $v"; exit 1; fi
           adb shell "rm -f $L"; echo "released" ;;
-  *) echo "usage: $0 status|take <handle> <what>|release <handle>"; exit 1 ;;
+  stale-check) stale_check "${2:-}" ;;
+  *) echo "usage: $0 status|take <handle> <what>|release <handle>|stale-check [<handle>]"; exit 1 ;;
 esac
