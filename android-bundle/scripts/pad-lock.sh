@@ -75,14 +75,22 @@ stale_check() {
         *h*|*hour*) _durs=$(( $(printf '%s' "$_dur" | grep -oE '[0-9]+') * 3600 )) ;;
         *m*)        _durs=$(( $(printf '%s' "$_dur" | grep -oE '[0-9]+') * 60 )) ;;
     esac
-    _need=$(( _durs + 1800 ))
+    # A lock taken through pad-run.sh carries "[hb]" and is touched every 60 s while its
+    # run lives, so silence is EVIDENCE the holder is gone rather than an inference from
+    # elapsed time. 5 minutes is five missed beats -- generous for a slow adb, far short
+    # of the half hour a non-heartbeated lock needs.
+    case "$_lk" in
+        *'[hb]'*) _need=300;  _why="no heartbeat for 5 min (lock is [hb])" ;;
+        *)        _need=$(( _durs + 1800 ))
+                  _why="stated ${_dur:-none} + 30 min (no heartbeat marker)" ;;
+    esac
     if [ "$_idle" -lt "$_need" ]; then
-        echo "NOT CLEARABLE: step 3 -- lock untouched for ${_idle}s, need ${_need}s (stated ${_dur:-none} + 30 min)"
+        echo "NOT CLEARABLE: step 3 -- lock touched ${_idle}s ago, need ${_need}s: $_why"
         return 1
     fi
     _resumed=$(adb shell dumpsys usagestats 2>/dev/null | tr -d '\r' \
                  | grep -c "type=ACTIVITY_RESUMED" 2>/dev/null || echo 0)
-    echo "  step 3 OK   lock untouched ${_idle}s (>= ${_need}s); usagestats rows present: $_resumed"
+    echo "  step 3 OK   lock untouched ${_idle}s (>= ${_need}s: $_why); usagestats rows: $_resumed"
     echo "              CHECK THOSE ROWS YOURSELF for activity inside your window -- this"
     echo "              counts them, it cannot know which window you care about."
 
@@ -99,6 +107,37 @@ stale_check() {
     echo "      $_lk"
     echo "    then take the lock in the same command with purpose 'cleared stale $_h'."
     return 0
+}
+
+
+# Step 4 of the #56 rule, and ONLY once stale_check says CLEARABLE.
+#
+# It cannot post to the bus for you, so it will not pretend to: --posted <ref> is you
+# asserting you already published the old line, and the reference is recorded in the new
+# lock so the claim is auditable by whoever was holding it. Without it, this refuses.
+clear_stale() {
+    _h="${1:-}"; shift 2>/dev/null || true
+    _ref=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --posted) _ref="${2:-}"; shift 2 ;;
+            *) echo "usage: $0 clear-stale <your-handle> --posted <where-you-posted-the-old-line>" >&2; return 2 ;;
+        esac
+    done
+    [ -n "$_h" ] || { echo "usage: $0 clear-stale <your-handle> --posted <ref>" >&2; return 2; }
+    if [ -z "$_ref" ]; then
+        echo "REFUSING: --posted <ref> is required." >&2
+        echo "  Step 4 of the rule is that the old line is published BEFORE it is cleared," >&2
+        echo "  so the holder can see what happened to their lock. Post it, then pass where." >&2
+        return 2
+    fi
+    _old=$(read_lock)
+    stale_check "" >/dev/null 2>&1 || { echo "REFUSING: stale-check does not say CLEARABLE. Run it and read the failing step." >&2; return 1; }
+    _oldh=$(pad_holder "$_old")
+    echo "clearing stale lock, previously held by '$_oldh':"
+    printf '  %s\n' "$_old"
+    adb shell "rm -f $L"
+    "$0" take "$_h" "cleared stale $_oldh (posted: $_ref)" || return 1
 }
 
 case "${1:-status}" in
@@ -142,5 +181,6 @@ case "${1:-status}" in
           if [ -n "$v" ] && [ "$(pad_holder "$v")" != "$h" ]; then echo "REFUSING: not my entry -> $v"; exit 1; fi
           adb shell "rm -f $L"; echo "released" ;;
   stale-check) stale_check "${2:-}" ;;
-  *) echo "usage: $0 status|take <handle> <what>|release <handle>|stale-check [<handle>]"; exit 1 ;;
+  clear-stale) shift; clear_stale "$@" ;;
+  *) echo "usage: $0 status|take <handle> <what>|release <handle>|stale-check [<handle>]|clear-stale <handle> --posted <ref>"; exit 1 ;;
 esac

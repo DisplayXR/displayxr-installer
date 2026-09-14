@@ -111,8 +111,33 @@ TOOK=no
 if [ "$(pad_holder "$HELD_BEFORE")" = "$HANDLE" ]; then
     echo "pad-run: lock already held by $HANDLE; leaving it in place on exit."
 else
-    "$HERE/pad-lock.sh" take "$HANDLE" "$PURPOSE" || exit 75
+    "$HERE/pad-lock.sh" take "$HANDLE" "$PURPOSE [hb]" || exit 75
     TOOK=yes
+fi
+
+# HEARTBEAT. While this run lives, touch the lock every 60 s. That turns "the lock
+# file has not changed" from a proxy for a dead holder into direct evidence of one,
+# so a stranded lock is recognisable in minutes instead of half an hour. The "[hb]"
+# marker in the purpose is what tells stale-check it may apply the fast rule; a lock
+# taken with pad-lock.sh by hand carries no marker and keeps the slow one.
+#
+# Two ways this could do harm, both guarded:
+#   - Outliving its run would give a DEAD run a LIVE heartbeat, which is worse than
+#     no heartbeat at all. So it checks its parent every cycle and exits with it.
+#   - `touch` CREATES a missing file, so a lingering beat could resurrect a released
+#     lock as an empty one -- which by protocol means held-by-unknown and can be
+#     cleared by nobody. So it touches only a lock that exists AND is still ours.
+HB_PID=""
+if [ "$TOOK" = yes ]; then
+    _parent=$$
+    (
+        while kill -0 "$_parent" 2>/dev/null; do
+            sleep 60
+            kill -0 "$_parent" 2>/dev/null || break
+            adb shell "test -e $LOCK && head -1 $LOCK | grep -q '^$HANDLE ' && touch $LOCK" >/dev/null 2>&1
+        done
+    ) &
+    HB_PID=$!
 fi
 
 OUT="${PAD_RUN_OUT:-$(mktemp -d)}"
@@ -164,6 +189,9 @@ finish() {
     # here would drop the outer run's pin mid-measurement, silently. That is the exact failure
     # class this wrapper exists to prevent. The outermost invocation owns the lock and restores
     # on its own exit.
+    # Stop the heartbeat BEFORE releasing: a beat landing after the rm would recreate
+    # the lock file, and an empty lock is the one state nobody is allowed to clear.
+    [ -n "$HB_PID" ] && kill "$HB_PID" 2>/dev/null
     if [ "$TOOK" = yes ]; then
         # 2>/dev/null because finish() ignores SIGPIPE and children inherit that: the helper
         # pipes into `grep -m1`, which exits after the first match, so the upstream `tr` no
