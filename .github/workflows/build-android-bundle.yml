@@ -315,13 +315,20 @@ jobs:
           # (android-bundle/README.md, "The expected/ files"). The two cross-checks below
           # stop the block from rotting silently in the meantime.
           printf '%s\n' \
-            'PLUGIN_EMBEDS cnsdk-android-0.10.68+192.4e2202b' \
+            'PLUGIN_EMBEDS cnsdk-android-0.10.69+193.8291a2e' \
             'PLUGIN_EMBEDS get_last_frame_dropped_cnsdk' \
-            '# REAL v2.6.20 discriminators, verified by diffing the v2.6.20 release tarball against the' \
-            '# 2.6.19 .so inside runtime 2.16.21. NOTE: plain `request_display_mode` is present in BOTH' \
-            "# (it is the runtime header's vtable slot name) — using it as a version check FALSE-PASSES." \
-            '# The _cnsdk-suffixed implementation symbols and the plug-in version string are absent from 2.6.19.' \
-            'PLUGIN_EMBEDS v2.6.20' \
+            '# WHICH OF THESE ACTUALLY DISCRIMINATE v2.6.21 from v2.6.20 — measured, by diffing the' \
+            '# two release tarballs (both .so are 2,098,512 bytes; only strings changed):' \
+            '#   cnsdk-android-0.10.69+193.8291a2e   2.6.20: 0 hits   2.6.21: 3   DISCRIMINATES' \
+            '#   v2.6.21                             2.6.20: 0        2.6.21: 1   DISCRIMINATES' \
+            '#   request_display_mode_cnsdk          2.6.20: 2        2.6.21: 2   does NOT' \
+            '#   leia_cnsdk_set_display_mode_3d      2.6.20: 3        2.6.21: 3   does NOT' \
+            '#   get_last_frame_dropped_cnsdk        2.6.20: 2        2.6.21: 2   does NOT' \
+            '# The three symbol markers were REAL discriminators for 2.6.20-vs-2.6.19 and are kept as' \
+            '# feature sanity checks, but they no longer prove a version: 2.6.21 changed only the CNSDK' \
+            '# it was built against, so the build string and the version string are the only evidence.' \
+            '# Keeping a stale marker here is not harmless — it is exactly how a version check FALSE-PASSES.' \
+            'PLUGIN_EMBEDS v2.6.21' \
             'PLUGIN_EMBEDS request_display_mode_cnsdk' \
             'PLUGIN_EMBEDS leia_cnsdk_set_display_mode_3d' \
             > "$RUNNER_TEMP/markers.txt"
