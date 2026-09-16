@@ -317,18 +317,21 @@ jobs:
           printf '%s\n' \
             'PLUGIN_EMBEDS cnsdk-android-0.10.69+193.8291a2e' \
             'PLUGIN_EMBEDS get_last_frame_dropped_cnsdk' \
-            '# WHICH OF THESE ACTUALLY DISCRIMINATE v2.6.21 from v2.6.20 — measured, by diffing the' \
-            '# two release tarballs (both .so are 2,098,512 bytes; only strings changed):' \
-            '#   cnsdk-android-0.10.69+193.8291a2e   2.6.20: 0 hits   2.6.21: 3   DISCRIMINATES' \
-            '#   v2.6.21                             2.6.20: 0        2.6.21: 1   DISCRIMINATES' \
-            '#   request_display_mode_cnsdk          2.6.20: 2        2.6.21: 2   does NOT' \
-            '#   leia_cnsdk_set_display_mode_3d      2.6.20: 3        2.6.21: 3   does NOT' \
-            '#   get_last_frame_dropped_cnsdk        2.6.20: 2        2.6.21: 2   does NOT' \
-            '# The three symbol markers were REAL discriminators for 2.6.20-vs-2.6.19 and are kept as' \
-            '# feature sanity checks, but they no longer prove a version: 2.6.21 changed only the CNSDK' \
-            '# it was built against, so the build string and the version string are the only evidence.' \
-            '# Keeping a stale marker here is not harmless — it is exactly how a version check FALSE-PASSES.' \
-            'PLUGIN_EMBEDS v2.6.21' \
+            '# WHICH OF THESE ACTUALLY DISCRIMINATE the pinned plug-in — measured by diffing the' \
+            '# release tarballs, NOT assumed. All three .so are 2,098,512 bytes: 2.6.21 changed only' \
+            '# the CNSDK it was built against, and 2.6.22 (the #242 bg-capture fix) added no new' \
+            '# symbols, so strings are the only evidence either way.' \
+            '#   v2.6.22                             2.6.21: 0   2.6.22: 1   DISCRIMINATES' \
+            '#   cnsdk-android-0.10.69+193.8291a2e   2.6.21: 3   2.6.22: 3   same CNSDK, so NO' \
+            '#   request_display_mode_cnsdk          2.6.21: 2   2.6.22: 2   does NOT' \
+            '#   leia_cnsdk_set_display_mode_3d      2.6.21: 3   2.6.22: 3   does NOT' \
+            '#   get_last_frame_dropped_cnsdk        2.6.21: 2   2.6.22: 2   does NOT' \
+            '# So the VERSION STRING is the only plug-in-version discriminator here. The CNSDK build' \
+            '# string keeps its own separate job below: cross-checking the LOADER stamp in the APK' \
+            '# manifest, which is a different artifact and a real check. The symbol markers stay as' \
+            '# feature sanity checks only. A marker believed to prove a version while present in BOTH' \
+            '# artifacts is exactly how a version check FALSE-PASSES.' \
+            'PLUGIN_EMBEDS v2.6.22' \
             'PLUGIN_EMBEDS request_display_mode_cnsdk' \
             'PLUGIN_EMBEDS leia_cnsdk_set_display_mode_3d' \
             > "$RUNNER_TEMP/markers.txt"
