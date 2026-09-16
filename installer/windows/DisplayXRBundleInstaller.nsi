@@ -748,7 +748,13 @@ Section "-FinalizeBundleArp"
     ReadRegStr $1 HKLM "Software\DisplayXR\Runtime" "InstallPath"
     ${If} $1 != ""
     ${AndIf} ${FileExists} "$1\displayxr-service.exe"
-        Exec '"$1\displayxr-service.exe"'   ; non-blocking, mirrors the runtime installer
+        ; #1478 (runtime repo): the bundle runs elevated, so a plain Exec would
+        ; hand the service a High-integrity token, which the IPC layer does not
+        ; expect (a Medium client cannot OpenProcess(PROCESS_DUP_HANDLE) a High
+        ; service, and every child the service spawns inherits the elevation).
+        ; Launch through the user's explorer.exe (Medium), the same way the
+        ; logon Run key starts it. Non-blocking, mirrors the runtime installer.
+        Exec 'explorer.exe "$1\displayxr-service.exe"'
         DetailPrint "DisplayXR Service restarted from $1."
     ${Else}
         DetailPrint "displayxr-service.exe not found via Software\DisplayXR\Runtime\InstallPath ($1) — skipping restart."
