@@ -85,6 +85,24 @@ reason a third party could not do it.
 
 ---
 
+## Route D — the installer app (no computer, no terminal, no zip)
+
+`DisplayXR-Installer-<ver>.apk`, attached to the `android-bundle-<date>` releases. Copy that one
+file to the tablet and tap it. It reads the published pins, downloads each component from its
+GitHub release, installs them in order, and does steps 1 and 2 below for you (step 2 as a
+deep-link — an installer cannot grant an app-op).
+
+Allow "install unknown apps" for it once when Android asks, and expect **one confirmation per
+package**: only a device owner or a privileged system app can install silently, and it is neither.
+
+It does **not** install the vendor display services (Route A/B/C step 1) — those come from the
+vendor's private repo and install only because they carry the OEM's signing key. If this tablet
+needs a services update, do that part by another route first.
+
+Source and full scope: [`../android-installer/README.md`](../android-installer/README.md).
+
+---
+
 ## After installing: five things that are not APKs
 
 Installing the APKs is **not** sufficient on a clean device. Route A does all of

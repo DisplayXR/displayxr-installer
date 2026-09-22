@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DisplayXR Installer</string>
+
+    <string name="subtitle">Installs the pinned DisplayXR stack on this tablet and performs the
+        post-install steps that an APK install does not do.</string>
+
+    <string name="opt_in_browser">Also install DisplayXR Browser (large download, ~326 MB)</string>
+
+    <string name="btn_install">Install / update</string>
+    <string name="btn_retry">Retry</string>
+    <string name="btn_allow_unknown_sources">Allow this app to install apps</string>
+    <string name="btn_grant_overlay">Open the setting</string>
+
+    <string name="unknown_sources_title">One permission first</string>
+    <string name="unknown_sources_body">Android will not let this app install anything until you
+        allow it to install unknown apps. Nothing can be pre-granted here — Android requires the
+        owner of the device to turn it on by hand.</string>
+
+    <string name="overlay_title">Grant “Display over other apps” to the runtime</string>
+    <string name="overlay_body">This one cannot be granted by an installer: SYSTEM_ALERT_WINDOW is
+        an app-op, never granted at install and dropped by any uninstall+reinstall. Without it,
+        see-through apps render on a BLACK background while 3D and weaving keep working — so it
+        reads as a content bug rather than a missing permission.</string>
+    <string name="overlay_granted">Granted. Nothing more to do here.</string>
+
+    <!-- Everything below is the honest half of this app: the steps it CANNOT
+         perform. Each line names the failure that follows from skipping it,
+         because the version that only listed the steps was not acted on. -->
+    <string name="not_automated_title">What this installer does NOT do</string>
+    <string name="not_automated_body">• Each package is confirmed by Android separately. One tap
+        here is still N confirmations — only a device owner or a privileged system app can install
+        silently, and this is neither.\n\n• It does not install the vendor display services. Those
+        come from the vendor’s own private repo and install only because they carry the OEM’s
+        signing key; this installer cannot fetch them and does not pretend to.\n\n• It cannot grant
+        CAMERA to Gaussian Splat or Avatar. Accept the prompt on their first launch, otherwise they
+        open on a consent dialog instead of content.\n\n• After a reboot, UNLOCK the tablet before
+        opening any app. Launching a demo at the lockscreen crashes Model Viewer and Gaussian Splat
+        (displayxr-runtime#1358).\n\n• If an app was installed from a build signed with a different
+        key, Android refuses the upgrade. This installer reports that rather than wiping the app’s
+        data behind your back; uninstall that one app and run again.</string>
+
+    <string name="footer_launch_once">The runtime is launched once automatically right after it
+        installs. That single launch is what registers its OpenXRRuntimeBroker ContentProvider —
+        until it happens, Android\'s FLAG_STOPPED keeps the provider unresolvable and every OpenXR
+        app dies at instance creation with XR_ERROR_RUNTIME_UNAVAILABLE. Nothing clears it at boot,
+        and it is the most common virgin-install failure.</string>
+</resources>

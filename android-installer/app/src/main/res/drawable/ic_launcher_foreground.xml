@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A stack of three planes over an arrow: "several packages, going down". -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#7FB4FF"
+        android:pathData="M54,26 L74,36 L54,46 L34,36 Z" />
+    <path android:fillColor="#4E8DF5"
+        android:pathData="M54,40 L74,50 L54,60 L34,50 Z" />
+    <path android:fillColor="#2F6FED"
+        android:pathData="M54,54 L74,64 L54,74 L34,64 Z" />
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M51,76 h6 v6 h6 l-9,10 l-9,-10 h6 Z" />
+</vector>

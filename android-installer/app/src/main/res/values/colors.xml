@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="dxr_accent">#2F6FED</color>
+    <color name="dxr_ok">#1E8E3E</color>
+    <color name="dxr_warn">#B06000</color>
+    <color name="dxr_error">#C5221F</color>
+    <color name="dxr_muted">#80808080</color>
+    <color name="ic_launcher_background">#101418</color>
+</resources>

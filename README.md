@@ -47,6 +47,25 @@ It installs the DisplayXR runtime + Leia SR display-processor plug-in with **zer
 
 Demos are **not** included on Linux yet — they ship Windows `.exe` / macOS `.pkg` today but no Linux `.deb`. `build-bundle-linux.sh` already loops over them and will pull each one in automatically once its repo publishes a `*_amd64.deb` release asset (and `components.sh` gains its `DEB_LINUX` glob). Tracks [`DisplayXR/displayxr-runtime#781`](https://github.com/DisplayXR/displayxr-runtime/issues/781).
 
+## Android installer APK
+
+Android has no NSIS equivalent — an App Bundle or a set of split APKs describes exactly one app —
+so the "one tappable artifact" job is done by an app. `DisplayXR-Installer-<ver>.apk` reads the same
+`versions.json` pin matrix, downloads each pinned component from its GitHub release, installs them
+in dependency order, and then performs the post-install steps that installing APKs does not do:
+opening the runtime once (without which every OpenXR app dies at instance creation with
+`XR_ERROR_RUNTIME_UNAVAILABLE`), and deep-linking to the runtime's "Display over other apps" switch
+(without which see-through apps render on black while 3D keeps working).
+
+The browser is **opt-in**, mirroring the desktop `--with browser` rule, and is refused unless the
+runtime actually on the tablet is the pinned one — the mismatched pair renders all 3D content in the
+browser black with no error on screen.
+
+It is **not silent**: Android confirms each package separately unless the installer is a device owner
+or a privileged system app. Full scope, the steps it cannot automate, and the failure states:
+[`android-installer/README.md`](android-installer/README.md). Tracks
+[#62](https://github.com/DisplayXR/displayxr-installer/issues/62).
+
 ## Developer install
 
 Building DisplayXR from source or running a dev box? Use the runtime repo's orchestrator instead:
