@@ -46,9 +46,14 @@ stale_check() {
     _lk=$(read_lock)
     if ! adb shell "test -e $L" 2>/dev/null; then echo "NOT CLEARABLE: no lock on this device"; return 1; fi
     if [ -z "$_lk" ]; then echo "NOT CLEARABLE: empty lock file (held-by-unknown) -- a human must resolve this"; return 1; fi
-    _h=$(pad_holder "$_lk")
-    if [ -n "$_want" ] && [ "$_h" != "$_want" ]; then
-        echo "NOT CLEARABLE: lock is held by '$_h', not '$_want'"; return 1
+    # _sc_h, not _h: sh has no locals, and clear_stale() calls this BEFORE reading its
+    # own _h (the caller's handle). While this was named _h, stale_check overwrote it with
+    # the STALE holder's handle, so `clear-stale <me>` silently re-took the lock as the
+    # holder it had just cleared -- and the take's read-back guard passed, because it was
+    # comparing that same clobbered value against itself. Observed 2026-09-22.
+    _sc_h=$(pad_holder "$_lk")
+    if [ -n "$_want" ] && [ "$_sc_h" != "$_want" ]; then
+        echo "NOT CLEARABLE: lock is held by '$_sc_h', not '$_want'"; return 1
     fi
 
     # Step 1 -- device identity. The lock and every piece of evidence below must come
