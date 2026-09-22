@@ -56,7 +56,14 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # packages: '' on purpose. The action's default is to `sdkmanager tools`,
+      # and `tools` is obsolete and no longer published — it fails the job with
+      # "Failed to find package 'tools'". The runner image already ships an
+      # Android SDK with its licences accepted; all this step adds is current
+      # cmdline-tools, and AGP fetches the compileSdk platform itself.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: ''
 
       - name: Read the version out of gradle.properties
         id: ver
