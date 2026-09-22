@@ -38,7 +38,7 @@ Needs `adb` ([Android platform-tools](https://developer.android.com/tools/releas
 3. ```bash
    ./scripts/install-from-computer.sh
    ```
-4. **Reboot the tablet.**
+4. **Reboot the tablet.** Not optional — see *[After installing](#after-installing)*.
 
 The script installs in dependency order, reports each package, prints the resulting
 versions, and stops with a non-zero exit if anything failed.
@@ -54,7 +54,7 @@ versions, and stops with a non-zero exit if anything failed.
    sh scripts/install-on-tablet.sh
    ```
 4. Accept the install-permission prompt if Android shows one.
-5. **Reboot the tablet.**
+5. **Reboot the tablet.** Not optional — see *[After installing](#after-installing)*.
 
 ---
 
@@ -71,7 +71,7 @@ Open a file manager on the tablet and tap each APK **in this order**:
 | 5 | `apks/4-browser/` | the browser |
 
 Android will ask permission to install from unknown sources — allow it for your file
-manager. Then **reboot**.
+manager. Then **reboot** — not optional, see *[After installing](#after-installing)*.
 
 **Verified on an NP02J, 2026-09-11.** The step people expect to fail is APK #1: the two CNSDK
 services are updates to *built-in* apps, and a file manager is not a privileged installer. It
@@ -259,6 +259,28 @@ wrong the display may misbehave until it is reinstalled or the tablet is reboote
 ---
 
 ## After installing
+
+### Reboot. It is not optional, and skipping it looks like nothing at all
+
+The display service is replaced under a running system, and the lens controller hangs off a
+UART that the vendor HAL talks to. Install without rebooting and the HAL can be left writing
+3D commands the controller never answers: **every app weaves and tracks your face, the runtime
+and the SDK both report 3D is on, `prove-3d.sh` used to PASS — and the glass stays flat 2D.**
+The OEM's own 3D viewer shows the same thing, which is the tell that it is below DisplayXR.
+Seen on 2026-09-22; a reboot power-cycles the HAL and the controller and clears it.
+
+The discriminator, from a computer — the HAL is the only layer that knows:
+
+```bash
+adb logcat -d | grep 'leiadisp@1.0-service'
+```
+
+Healthy: `Setting light state to be 1` … `write() finished` … **`read() finished`** …
+`parse_value():buf[0]=0x52, buf[1]=0x53`.
+Wedged: the same write followed by **`select() timeout`** and **`read() failed`** → reboot
+the tablet and try again. `./scripts/prove-3d.sh` now checks this and FAILs on it.
+
+### Confirming the stack is live
 
 Reboot, then open a demo. To confirm the stack is live, from a computer:
 

@@ -1,0 +1,5 @@
+09-22 16:41:02.118  1482  1482 D vendor.leia.hardware.leiadisp@1.0-service: Setting light state to be 1
+09-22 16:41:02.119  1482  1482 D vendor.leia.hardware.leiadisp@1.0-service: zte_srs gpio status = 1
+09-22 16:41:02.121  1482  1482 D vendor.leia.hardware.leiadisp@1.0-service: write() finished
+09-22 16:41:02.164  1482  1482 D vendor.leia.hardware.leiadisp@1.0-service: read() finished
+09-22 16:41:02.165  1482  1482 D vendor.leia.hardware.leiadisp@1.0-service: parse_value():buf[0]=0x52, buf[1]=0x53

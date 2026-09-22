@@ -16,7 +16,7 @@ prevents. Please keep those comments when editing: they are the reason the check
 | 3 | `reset-to-virgin.sh --yes [--revert-services]` | Optional clean slate: removes every DisplayXR package, optionally reverts the vendor services to their factory builds, reboots. |
 | 4 | `install-from-computer.sh` | Installs in dependency order and performs the post-install steps that installs do not do. |
 | 5 | `audit-device.sh` | Reads what is *actually installed* — including the vendor core's own hash — and compares it with the bundle. Needs `adb root`. |
-| 6 | `prove-3d.sh <pkg>` | The 3D pipeline comes up: the vendor core loads and the display processor is created. |
+| 6 | `prove-3d.sh <pkg>` | The 3D pipeline comes up: the vendor core loads, the display processor is created, **and the panel's lens controller answered the HAL's 3D write**. |
 | 7 | `prove-freeform.sh <pkg>` | The app survives the recents small-window toggle and weaves 1:1 inside it. |
 | 8 | `prove-dropzone.sh <pkg>` | The drop-zone geometry weaves. **Contains a manual step** — see below. |
 | 9 | `prove-exit-clean.sh <pkg> [n]` | Returning to fullscreen never leaves the view squashed. |
@@ -27,7 +27,8 @@ prevents. Please keep those comments when editing: they are the reason the check
 ## `lib.sh`
 
 Helpers shared by more than one script live in `lib.sh`, sourced as `. "$(dirname "$0")/lib.sh"`:
-`restore_rotation`, `task_sz`, `wait_picker_done`, `open_mediaplayer_file`, `ver`, `require_pad`. It exists because
+`restore_rotation`, `task_sz`, `wait_picker_done`, `open_mediaplayer_file`, `ver`, `pad_holder`,
+`require_pad`, `weave_frames`, `lens_ack_verdict`. It exists because
 `restore_rotation` had been copied into seven scripts and had **already drifted into three
 variants**, two of which silently skipped the check that the pad's rotation was handed back.
 
@@ -38,6 +39,23 @@ It also `bash -n`s every script.
 So the scripts are **not standalone any more**: `lib.sh` must sit beside them. The bundle ships the
 whole `scripts/` directory and `sync-from-repo.sh` keeps it complete, so this only bites if someone
 copies a single script out on its own.
+
+## `tests/` — the parts that can be checked without the pad
+
+```
+./tests/lens-ack-fixtures.sh
+```
+
+Runs in CI (`lint.yml`) and on any box, device-free: it feeds recorded logcat captures from
+`tests/fixtures/` through `lens_ack_verdict` and checks both the verdict and the gate
+`prove-3d.sh` builds on it. It exists because on **2026-09-22** `prove-3d.sh` passed a K68 whose
+glass was physically 2D with a face in view — the lens controller had never answered the HAL's
+3D write over UART, and every layer above the HAL reported success because all any of them sees
+is that the write went out. A reboot fixed the device; nothing in the harness had noticed.
+
+Anything that classifies a log is testable this way, so put it in `lib.sh` as a pure function
+and pin it here. `tests/` is **not** shipped in the bundle — `sync-from-repo.sh` copies
+`scripts/` only, and a tester has no use for it.
 
 ## Keeping a bundle folder in sync
 
