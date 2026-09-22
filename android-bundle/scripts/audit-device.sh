@@ -33,6 +33,44 @@ show() { printf '  %-58s %s\n' "$1" "$2"; }
 warn=0
 echo "installed:"
 for p in com.leialoft.display.config com.leia.headtrackingservice "$RT" org.chromium.chrome; do show "$p" "$(ver "$p" 2>/dev/null || true)"; done
+
+# ENUMERATE, do not only interrogate. The fixed list above answers "is the CNSDK pair right?"
+# and is deliberately short -- but it is also the whole of what this script used to print, so
+# every com.displayxr.* demo was invisible here. An audit that omits installed packages does
+# not read as "not checked", it reads as a CLEAN DEVICE.
+#
+# Observed 2026-09-22 on the K68 (327343950099): all five demos were installed and a full
+# release behind (avatar 0.11.11, earthview 0.7.7, modelviewer 0.28.6, gauss 1.25.5,
+# mediaplayer 1.9.7), this script printed none of them, and the operator concluded from its
+# output that the device had no demos at all. `pm list packages` on the device settled it in
+# one command. So ask the DEVICE what is installed, and flag anything this bundle cannot
+# account for -- a leftover from another bundle is exactly what a version audit should surface.
+echo "displayxr apps installed (enumerated from the device):"
+DXR_PKGS=$(adb shell 'pm list packages' 2>/dev/null | tr -d '\r' | sed 's/^package://' | grep -E '^com\.displayxr\.' | sort)
+if [ -z "$DXR_PKGS" ]; then
+    show "(none)" ""
+else
+    # Package names the bundle beside us can account for, read from the APKs themselves --
+    # a filename is not a package name and must never be treated as one.
+    BUNDLE_PKGS=""
+    if [ -n "$AAPT2" ] && [ -d "$(dirname "$0")/../apks" ]; then
+        for a in "$(dirname "$0")"/../apks/*/*.apk; do
+            [ -f "$a" ] || continue
+            bp=$("$AAPT2" dump packagename "$a" 2>/dev/null | tr -d '\r')
+            [ -n "$bp" ] && BUNDLE_PKGS="$BUNDLE_PKGS $bp"
+        done
+    fi
+    for p in $DXR_PKGS; do
+        note=""
+        if [ -n "$BUNDLE_PKGS" ]; then
+            case " $BUNDLE_PKGS " in
+                *" $p "*) : ;;
+                *) note="   <- NOT IN THIS BUNDLE (leftover from another install?)"; warn=1 ;;
+            esac
+        fi
+        show "$p" "$(ver "$p" 2>/dev/null || true)$note"
+    done
+fi
 [ -n "$AAPT2" ] || { echo; echo "  no aapt2 under ~/Library/Android/sdk/build-tools (or \$ANDROID_HOME) -- stamps NOT checked."; exit 0; }
 echo "stamps (read from the installed APKs):"
 RT_V=$(stamp "$RT" com.displayxr.CNSDK_LOADER_VERSION); RT_B=$(stamp "$RT" com.displayxr.CNSDK_LOADER_BUILD)
