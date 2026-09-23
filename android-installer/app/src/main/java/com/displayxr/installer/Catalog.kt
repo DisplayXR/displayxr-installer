@@ -30,6 +30,15 @@ data class Component(
     val packageName: String,
     /** Opt-in components are not installed unless the user ticks them. */
     val optIn: Boolean = false,
+    /**
+     * Manifest `<meta-data>` key carrying this component's DisplayXR version,
+     * for packages whose `versionName` is something else. Null means
+     * `versionName` IS the DisplayXR version, which is true of everything
+     * except the browser.
+     */
+    val versionStampKey: String? = null,
+    /** What `versionName` actually is, when it is not the DisplayXR version. */
+    val opaqueVersionLabel: String? = null,
     /** Picks this component's asset out of the release's asset list. */
     val assetMatch: (String) -> Boolean,
 )
@@ -43,6 +52,13 @@ object Catalog {
         "https://raw.githubusercontent.com/$PINS_REPO/$PINS_REF/versions.json"
 
     private const val RUNTIME_REPO = "DisplayXR/displayxr-runtime"
+
+    /**
+     * Manifest meta-data key the browser APK will carry from
+     * displayxr-browser-pvt#159. Until a build that has it is installed, the
+     * browser row reports its version as unknown — which is the truth.
+     */
+    const val BROWSER_VERSION_STAMP = "com.displayxr.BROWSER_VERSION"
 
     /**
      * The runtime ships two Android variants from one release. The vendor one
@@ -124,6 +140,14 @@ object Catalog {
             pinField = "browser",
             packageName = "org.chromium.chrome",
             optIn = true,
+            // `org.chromium.chrome`'s versionName is the CHROMIUM version
+            // (154.0.8037.17), not the DisplayXR release, and several DisplayXR
+            // releases share one Chromium base — so there is no comparison to
+            // make from it. Read the stamp when the APK carries one
+            // (displayxr-browser-pvt#159 adds it); otherwise say "unknown"
+            // rather than compare the wrong number. See Installed.Opaque.
+            versionStampKey = BROWSER_VERSION_STAMP,
+            opaqueVersionLabel = "Chromium",
             assetMatch = ANY_APK,
         ),
     )

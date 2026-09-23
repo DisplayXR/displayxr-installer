@@ -109,6 +109,18 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical" />
 
+            <!-- The launch-once step runs automatically at the end of a run.
+                 This is the manual handle for when it could not: a locked screen
+                 that stayed locked, or a runtime whose launcher would not
+                 resolve. Without it the owner has no way back to that step. -->
+            <Button
+                android:id="@+id/runtimeLaunchBtn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/btn_open_runtime"
+                android:visibility="gone" />
+
             <LinearLayout
                 android:id="@+id/overlayCard"
                 style="@style/Card"

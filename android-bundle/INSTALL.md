@@ -94,6 +94,10 @@ deep-link — an installer cannot grant an app-op).
 
 Allow "install unknown apps" for it once when Android asks, and expect **one confirmation per
 package**: only a device owner or a privileged system app can install silently, and it is neither.
+**Unlock the tablet first and leave it awake** — the run ends by opening the runtime, and launching
+an app behind the lockscreen crashes some demos (runtime#1358); the installer now refuses to start
+locked and waits for an unlock before that last step. If a confirmation dialog does not appear, the
+row says so after ~20 s and offers RETRY rather than waiting forever.
 
 It does **not** install the vendor display services (Route A/B/C step 1) — those come from the
 vendor's private repo and install only because they carry the OEM's signing key. If this tablet

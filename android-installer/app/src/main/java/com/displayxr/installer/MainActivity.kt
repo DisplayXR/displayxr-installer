@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
+import android.view.WindowManager
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -28,10 +29,12 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         ui = ActivityMainBinding.inflate(layoutInflater)
         setContentView(ui.root)
+        Foreground.appContext = applicationContext
 
         ui.errorRetry.setOnClickListener { vm.refresh() }
         ui.unknownSourcesBtn.setOnClickListener { openUnknownSourcesSettings() }
         ui.overlayBtn.setOnClickListener { openRuntimeOverlaySettings() }
+        ui.runtimeLaunchBtn.setOnClickListener { vm.launchRuntimeOnce() }
         ui.browserOptIn.setOnCheckedChangeListener { _, checked -> vm.setBrowserOptIn(checked) }
 
         ui.installBtn.setOnClickListener {
@@ -41,7 +44,7 @@ class MainActivity : AppCompatActivity() {
                 // "Check again" must not start a run. With nothing to install the
                 // run would still fire the launch-once step, which yanks the
                 // screen over to the runtime's dashboard for no reason.
-                s.phase == Phase.READY && s.rows.any { it.status in PLANNED } -> vm.install()
+                s.phase == Phase.READY && s.rows.any { it.status in PLANNED_STATUSES } -> vm.install()
                 else -> vm.refresh()
             }
         }
@@ -57,6 +60,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Two reasons this matters beyond bookkeeping:
+        //  - ApkInstaller starts the confirmation intent FROM the resumed
+        //    activity when there is one. A background activity start can be
+        //    dropped silently, which is a candidate cause of the K68's stall.
+        //  - A confirmation already reported stalled is re-raised here, so
+        //    coming back to the app is itself a recovery.
+        Foreground.activity = this
+        vm.onForeground()
+
         // The two things the owner can change while this app is in the
         // background are the unknown-sources allowance and the runtime's overlay
         // app-op, so both are re-read here rather than cached from onCreate.
@@ -64,16 +76,33 @@ class MainActivity : AppCompatActivity() {
         vm.refreshInstalledVersions()
     }
 
+    override fun onPause() {
+        if (Foreground.activity === this) Foreground.activity = null
+        super.onPause()
+    }
+
     // ------------------------------------------------------------------- UI
 
     private fun render(s: UiState) {
-        ui.pinSource.text = s.pinSource
         ui.browserOptIn.isChecked = s.browserOptIn
 
         ui.errorCard.visibility = if (s.globalError == null) View.GONE else View.VISIBLE
         ui.errorText.text = s.globalError.orEmpty()
 
         for (row in s.rows) renderRow(row)
+
+        // A run can take many minutes on a large download, and this app must stay
+        // foreground across it: that is both how the confirmation intents get a
+        // legal activity start, and the simplest defence against the OEM's
+        // CpuFreezerManagerServiceV2, which targets apps that are not.
+        if (s.phase == Phase.RUNNING || s.awaitingUnlock) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+
+        ui.runtimeLaunchBtn.visibility =
+            if (s.phase == Phase.FINISHED || s.awaitingUnlock) View.VISIBLE else View.GONE
 
         ui.installBtn.isEnabled = when (s.phase) {
             Phase.RESOLVING, Phase.RUNNING -> false
@@ -85,7 +114,7 @@ class MainActivity : AppCompatActivity() {
             Phase.FINISHED -> "Check again"
             Phase.IDLE -> if (s.globalError != null) getString(R.string.btn_retry) else "Check versions"
             Phase.READY ->
-                if (s.rows.any { it.status in PLANNED }) getString(R.string.btn_install)
+                if (s.rows.any { it.status in PLANNED_STATUSES }) getString(R.string.btn_install)
                 else "Check again"
         }
 
@@ -108,7 +137,9 @@ class MainActivity : AppCompatActivity() {
         b.name.text = row.component.displayName
         b.versions.text = buildString {
             append("pinned ").append(row.pin ?: "—")
-            append("   installed ").append(row.installed ?: "not installed")
+            // Never a bare number here for a package whose version cannot be
+            // compared: Installed.label() prints "unknown (Chromium 154.0.…)".
+            append("   installed ").append(row.installed.label())
             row.asset?.let { append("\n").append(it.name) }
         }
 
@@ -116,27 +147,34 @@ class MainActivity : AppCompatActivity() {
         b.status.text = if (row.detail.isBlank()) label else "$label\n${row.detail}"
         b.status.setTextColor(ContextCompat.getColor(this, color))
 
-        if (row.status == RowStatus.DOWNLOADING && row.progressPercent >= 0) {
-            b.progress.visibility = View.VISIBLE
-            b.progress.isIndeterminate = false
-            b.progress.progress = row.progressPercent
-        } else if (row.status == RowStatus.INSTALLING || row.status == RowStatus.RESOLVING) {
-            b.progress.visibility = View.VISIBLE
-            b.progress.isIndeterminate = true
-        } else {
-            b.progress.visibility = View.GONE
+        when {
+            row.status == RowStatus.DOWNLOADING && row.progressPercent >= 0 -> {
+                b.progress.visibility = View.VISIBLE
+                b.progress.isIndeterminate = false
+                b.progress.progress = row.progressPercent
+            }
+
+            row.status == RowStatus.INSTALLING || row.status == RowStatus.RESOLVING -> {
+                b.progress.visibility = View.VISIBLE
+                b.progress.isIndeterminate = true
+            }
+
+            else -> b.progress.visibility = View.GONE
         }
 
-        // The one row action there is: Android will not replace a package signed
-        // with another key, and will not downgrade one. Both dead-end in the same
-        // place, and both cost the app's data — so this offers the uninstall
-        // explicitly instead of performing it.
-        val needsUninstall = row.offerUninstall || row.status == RowStatus.NEWER_INSTALLED
-        b.action.visibility = if (needsUninstall) View.VISIBLE else View.GONE
-        b.action.text = "Uninstall ${row.component.displayName} (drops its data)"
-        b.action.setOnClickListener {
-            val intent = Intent(Intent.ACTION_DELETE, Uri.parse("package:${row.component.packageName}"))
-            runCatching { startActivity(intent) }
+        // The only row action left is RETRY on a confirmation that never
+        // appeared. There is deliberately NO uninstall button: it was offered on
+        // the strength of a version comparison the code could not make, and on
+        // this OEM build the uninstall dialog opens and closes again in the same
+        // second without doing anything — so it would be a destructive-looking
+        // control that does nothing, chosen for a reason that was wrong.
+        if (row.status == RowStatus.CONFIRM_STALLED) {
+            b.action.visibility = View.VISIBLE
+            b.action.text = getString(R.string.btn_retry_confirm)
+            b.action.setOnClickListener { vm.retryConfirmation() }
+        } else {
+            b.action.visibility = View.GONE
+            b.action.setOnClickListener(null)
         }
     }
 
@@ -148,14 +186,16 @@ class MainActivity : AppCompatActivity() {
         RowStatus.UNRESOLVED -> "Could not be resolved" to R.color.dxr_error
         RowStatus.INSTALL -> "Will be installed" to R.color.dxr_accent
         RowStatus.UPDATE -> "Update available" to R.color.dxr_accent
+        RowStatus.UPDATE_UNVERIFIABLE -> "Will install the pinned build" to R.color.dxr_accent
         RowStatus.UP_TO_DATE -> "Up to date" to R.color.dxr_ok
         RowStatus.NEWER_INSTALLED ->
-            "Installed build is NEWER than the pin. Android refuses a downgrade, so this is " +
-                "skipped; uninstall it first if you really want the pinned build." to R.color.dxr_warn
+            "Installed build is newer than the pin. Android refuses a downgrade, so this is " +
+                "skipped." to R.color.dxr_warn
         RowStatus.BLOCKED -> "Refused" to R.color.dxr_error
         RowStatus.SKIPPED -> "Not selected" to R.color.dxr_muted
         RowStatus.DOWNLOADING -> "Downloading…" to R.color.dxr_accent
         RowStatus.INSTALLING -> "Installing — confirm on screen" to R.color.dxr_accent
+        RowStatus.CONFIRM_STALLED -> "Waiting — no confirmation appeared" to R.color.dxr_warn
         RowStatus.DONE -> "Installed" to R.color.dxr_ok
         RowStatus.FAILED -> "Failed" to R.color.dxr_error
     }
@@ -192,15 +232,11 @@ class MainActivity : AppCompatActivity() {
     /**
      * Deep-link to the runtime's "Display over other apps" switch.
      *
-     * This is a navigation aid and nothing more: SYSTEM_ALERT_WINDOW is an
-     * app-op, and no ordinary app can grant it to another package. Some OEM
-     * builds also ignore the package-scoped form, hence the two fallbacks —
-     * dropping the owner on the full list beats an ActivityNotFoundException.
+     * A navigation aid and nothing more: SYSTEM_ALERT_WINDOW is an app-op, and no
+     * ordinary app can grant it to another package. Some OEM builds also ignore
+     * the package-scoped form, hence the two fallbacks — dropping the owner on
+     * the full list beats an ActivityNotFoundException.
      */
-    private companion object {
-        val PLANNED = setOf(RowStatus.INSTALL, RowStatus.UPDATE)
-    }
-
     private fun openRuntimeOverlaySettings() {
         val targeted = Intent(
             Settings.ACTION_MANAGE_OVERLAY_PERMISSION,

@@ -37,9 +37,11 @@ why the step exists — please keep them attached to the code.
 | **Open the runtime once** | **yes**, at the end of the run | Uninstalling deregisters the `OpenXRRuntimeBroker` ContentProvider and `FLAG_STOPPED` keeps it unresolvable; every OpenXR app then dies at instance creation with `XR_ERROR_RUNTIME_UNAVAILABLE`. Nothing clears it at boot. **The most common virgin-install failure.** |
 | "Display over other apps" for the runtime | **deep-link only** | `SYSTEM_ALERT_WINDOW` is an app-op. No ordinary app can grant it to another package. Without it see-through apps render on a **black background** while 3D and weaving keep working, so it reads as a content bug. |
 | Browser ↔ runtime pairing | yes, as a refusal | A browser paired with a runtime that is not its pinned match renders **all 3D content black**, with no error on screen, while every other app keeps weaving. |
-| Per-app state (installed vs pinned) | yes | It doubles as an updater, and it makes "did that actually install?" answerable without adb. |
-| Signature-mismatch dead end | reported, never performed | Android refuses to upgrade across a signing-key change. The only fix drops that app's data, so the installer names the app and stops. |
-| Installed build newer than the pin | reported, skipped | Android refuses a downgrade. Offering the uninstall beats a failed install with no explanation. |
+| Per-app state (installed vs pinned) | yes, **where the version can be read** | It doubles as an updater — but see *Versions that cannot be read* below: a number that means something else is not a weaker signal, it is the wrong one. |
+| A confirmation dialog that never appears | 20 s timeout → RETRY, 5 min → move on | On the K68 the first run sat on "confirm on screen" for an hour with nothing on screen to confirm. |
+| Waiting for an unlocked screen before opening the runtime | yes | Launching an app behind the keyguard crashes Model Viewer and Gaussian Splat ([displayxr-runtime#1358](https://github.com/DisplayXR/displayxr-runtime/issues/1358)), and a long run ends unattended. |
+| Signature-mismatch dead end | reported, never performed | Android refuses to upgrade across a signing-key change. The only fix drops that app's data, so the installer names the app and the Settings path, and stops. |
+| Installed build newer than the pin | reported, skipped | Android refuses a downgrade. No uninstall is offered — see below. |
 
 ## What it does NOT do
 
@@ -59,6 +61,85 @@ why the step exists — please keep them attached to the code.
   constraint is real.
 - **It cannot read another app's overlay app-op.** That needs a privileged permission this app does
   not hold and should not ask for, so the UI says "look at the switch" rather than guessing.
+
+## Versions that cannot be read, and why no uninstall button exists
+
+`versionName` is the DisplayXR release version for the runtime and every demo. It is **not** for the
+browser: `org.chromium.chrome` reports the **Chromium** version (`154.0.8037.17`), and several
+DisplayXR browser releases share one Chromium base, so there is no comparison to make from it
+(displayxr-browser-pvt#158).
+
+The first build of this installer compared `v1.0.4` against `154.0.8037.17`, reached the only
+conclusion that comparison can ever reach — "installed is newer" — and offered to **uninstall the
+tester's browser, dropping its profile**, to resolve a conflict that did not exist. A tester
+following the UI would have lost their profile and landed on an older build.
+
+The rule that came out of it, and the one worth keeping: **a destructive action is never offered on
+the strength of a comparison the code cannot make.** Concretely:
+
+- the browser row shows `installed: unknown (Chromium 154.0.8037.17)`, never a bare number that
+  invites a comparison;
+- it is offered as an install/update, and can never reach "newer";
+- there is **no uninstall button anywhere in the app**. Where an uninstall is genuinely the only way
+  forward (a signing-key change), the row names the app and the Settings path and stops. That is
+  also the safer choice on this hardware: on the K68's OEM build, `ACTION_DELETE` opened
+  `UninstallerActivity` and returned within the same second, twice, without uninstalling anything —
+  so a button there would have been a destructive-looking control that did nothing.
+
+It is forward-compatible rather than permanent. When the browser APK carries a
+`com.displayxr.BROWSER_VERSION` manifest `<meta-data>` (displayxr-browser-pvt#159 adds it), the row
+reads it with `getApplicationInfo(GET_META_DATA)` and compares like for like, with no change here.
+That is the same shape as `android-bundle/scripts/audit-device.sh` reading the CNSDK stamps: a real
+signal from a stamp, not an unrelated number pressed into service.
+
+## When the confirmation dialog does not appear
+
+Android confirms each package separately, and on the K68 that confirmation **stopped arriving** after
+the first package: the runtime installed cleanly, the next row moved to "Installing — confirm on
+screen", and no dialog ever appeared. It sat there an hour. `usagestats` shows the runtime's own
+`PackageInstallerActivity` opening and closing normally and then no second one, ever. Force-stopping
+the app and re-tapping drove the remaining five packages straight through, so it was neither a bad
+session nor a bad asset.
+
+Two candidates are in the log and the cause is not settled: the OEM's `CpuFreezerManagerServiceV2`
+freezing this app (`mFreezeType=3`, a freeze check every ~30 s), and a `STATUS_PENDING_USER_ACTION`
+intent started while the app was not foreground and dropped as a background activity start. What was
+indefensible either way is the UI contract — it claimed there was something on screen to confirm
+when there was not, and offered no way out. So, cause-independently:
+
+- **`ConfirmationWatchdog`** gives "waiting for the owner" a deadline: **20 s** with no answer flips
+  the row to *"Android's confirmation dialog has not appeared"* with a visible **RETRY** that
+  re-raises the stored confirmation intent; **5 minutes** in total, retries included, abandons the
+  session and lets the run continue to the next package. An hour on one row is now impossible.
+- The confirmation intent is started **from the resumed activity** whenever there is one, because a
+  background activity start can be dropped silently. The application-context fallback always carries
+  `FLAG_ACTIVITY_NEW_TASK`, and a start that throws is reported rather than assumed.
+- A **stalled** confirmation is re-raised automatically when the app regains the foreground — and
+  only a stalled one: re-raising an in-flight confirmation would fire every time the dialog itself
+  pauses and resumes this activity, which is a loop, not a recovery.
+- The window holds **`FLAG_KEEP_SCREEN_ON`** for the duration of a run, which keeps the app visible
+  and foreground — both the legal footing for those activity starts and the simplest defence against
+  a freezer that targets apps which are not.
+
+No foreground service. It would need `FOREGROUND_SERVICE_DATA_SYNC`, a notification channel and a
+runtime notification permission on API 33+, none of which can be validated from a build — and the
+observed symptom is addressed by staying foreground. If the freezer turns out to be the cause and
+`KEEP_SCREEN_ON` is not enough, that is the next step, not the first.
+
+The state machine is pure Kotlin with an injected clock precisely so it is covered by JVM tests:
+`ConfirmationWatchdogTest` drives the soft timeout, the retry, the hard cap despite repeated retries,
+and the foreground re-raise rule.
+
+## The lockscreen
+
+A run ends by opening the runtime once, and after a large download it ends unattended. Launching an
+app behind the keyguard is the documented crash path for Model Viewer and Gaussian Splat
+(displayxr-runtime#1358) — the tablet was in fact on the lockscreen when the first device run
+started. So `KeyguardManager.isKeyguardLocked()` is checked twice: a run will not **start** into a
+locked screen, and the launch-once step **waits** for an unlocked one (polling every 2 s for up to
+10 minutes, with an "Open the runtime once" button as the manual handle). Polling beats a dynamic
+`ACTION_USER_PRESENT` receiver here: the receiver dies with the process, and this is only ever armed
+while the app is alive and foreground anyway.
 
 ## The browser gate
 
@@ -86,6 +167,9 @@ or, for the one failure that stops everything, a card at the top with a Retry:
 | Download dies mid-way | "Download of X ended after N of M bytes." The partial file is deleted, not installed. |
 | Out of space | Reported before the stream starts, from the session's declared size. |
 | Owner cancels a confirmation | "Cancelled at the Android confirmation dialog. Nothing was changed." |
+| The confirmation never appears | After 20 s: "Android's confirmation dialog has not appeared" + a RETRY button. After 5 min: the session is abandoned, the row says so, and the run continues. |
+| The tablet is locked | The run refuses to start, and the launch-once step waits for an unlock instead of launching into the keyguard. |
+| The browser's version cannot be read | `installed: unknown (Chromium …)`, offered as an install. Never "newer", and never an uninstall. |
 | The runtime leg fails | The run stops there and says why — an app installed without a runtime only fails later, at startup. |
 
 ## Building
@@ -123,9 +207,11 @@ android-installer/
 ├── gradle.properties            installerVersionName / installerVersionCode
 └── app/src/main/java/com/displayxr/installer/
     ├── Catalog.kt               the component table — mirrors install-android-bundle.sh
+    ├── UiModel.kt               row/phase model + plannedStatus (pure, JVM-tested)
+    ├── ConfirmationWatchdog.kt  the pending-user-action deadline (pure, JVM-tested)
     ├── Net.kt                   HTTP + every typed failure the UI can show
     ├── GitHubReleases.kt        versions.json + pin -> release asset
     ├── ApkInstaller.kt          PackageInstaller sessions and their verdicts
-    ├── InstallerViewModel.kt    the run: order, the browser gate, launch-once
+    ├── InstallerViewModel.kt    the run: order, the browser gate, launch-once, keyguard
     └── MainActivity.kt          the screen
 ```
