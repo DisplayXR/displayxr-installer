@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Installing other packages. The owner must additionally allow "install
+         unknown apps" for this app once; Android exposes no way to pre-grant it,
+         so MainActivity checks canRequestPackageInstalls() and deep-links to the
+         screen rather than failing at the first commit(). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Not requested: QUERY_ALL_PACKAGES. It is a restricted permission and we
+         only ever ask about seven known packages, which <queries> covers. Without
+         these entries getPackageInfo() throws NameNotFoundException on API 30+
+         even for installed apps, and every row would read "not installed". -->
+    <queries>
+        <package android:name="org.freedesktop.monado.openxr_runtime.out_of_process" />
+        <package android:name="com.displayxr.model_viewer_vk_android" />
+        <package android:name="com.displayxr.mediaplayer_vk_android" />
+        <package android:name="com.displayxr.gausssplat_vk_android" />
+        <package android:name="com.displayxr.earthview_vk_android" />
+        <package android:name="com.displayxr.avatar_vk_android" />
+        <package android:name="org.chromium.chrome" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.DisplayXRInstaller">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Not exported: the only sender is our own PendingIntent, handed to
+             PackageInstaller.Session.commit(). The Intent names this class
+             explicitly, so no filter is needed and none is declared. -->
+        <receiver
+            android:name=".InstallResultReceiver"
+            android:exported="false" />
+    </application>
+
+</manifest>

@@ -19,3 +19,11 @@ Thumbs.db
 
 # Downloaded child-installer copies
 scripts/lib/.cached-components.sh
+
+# Android installer module (Gradle)
+android-installer/.gradle/
+android-installer/.kotlin/
+android-installer/build/
+android-installer/app/build/
+android-installer/local.properties
+android-installer/_out/

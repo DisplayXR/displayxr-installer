@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <ScrollView
+        android:id="@+id/scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_name"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/subtitle"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/pinSource"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:layout_marginBottom="14dp"
+                android:textSize="12sp"
+                android:typeface="monospace" />
+
+            <!-- Global failure state. Anything that stops the whole run — no
+                 network, an unreadable versions.json, a throttled GitHub API —
+                 lands here with the reason and a Retry, never as a spinner that
+                 never resolves. -->
+            <LinearLayout
+                android:id="@+id/errorCard"
+                style="@style/Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/errorText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/dxr_error"
+                    android:textSize="14sp" />
+
+                <Button
+                    android:id="@+id/errorRetry"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/btn_retry" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/unknownSourcesCard"
+                style="@style/Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/unknown_sources_title"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/unknown_sources_body"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/unknownSourcesBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/btn_allow_unknown_sources" />
+            </LinearLayout>
+
+            <CheckBox
+                android:id="@+id/browserOptIn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:checked="false"
+                android:text="@string/opt_in_browser" />
+
+            <LinearLayout
+                android:id="@+id/rows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <!-- The launch-once step runs automatically at the end of a run.
+                 This is the manual handle for when it could not: a locked screen
+                 that stayed locked, or a runtime whose launcher would not
+                 resolve. Without it the owner has no way back to that step. -->
+            <Button
+                android:id="@+id/runtimeLaunchBtn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/btn_open_runtime"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/overlayCard"
+                style="@style/Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/overlay_title"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/overlay_body"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/overlayState"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/overlayBtn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/btn_grant_overlay" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="@string/footer_launch_once"
+                android:textSize="12sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/not_automated_title"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/not_automated_body"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </ScrollView>
+
+    <Button
+        android:id="@+id/installBtn"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:text="@string/btn_install" />
+</LinearLayout>
