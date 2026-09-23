@@ -213,3 +213,55 @@ weave_frames() {
     _wev=$(printf '%s\n' "$_log" | grep -c 'leia_cnsdk_weave')
     [ "$_wev" -gt "$_pub" ] && echo "$_wev" || echo "$_pub"
 }
+
+# Did the panel's LENS CONTROLLER actually ACK the HAL's 3D write?
+#
+# 2026-09-22, K68: after a bundle install WITHOUT the reboot step, every app wove and
+# tracked, prove-3d.sh PASSED -- and the glass was physically 2D with a face in view.
+# Bisecting the runtime (2.20.1 -> 2.16.36) changed nothing, and the OEM's own 3D viewer
+# had the same symptom. The only layer that knew was the vendor HAL. The lens controller
+# hangs off a UART (the OEM's zte_srs / *_3d_uart feature path), and the HAL had written the 3D
+# command and never got its answer -- in logcat, from leiadisp@1.0-service:
+#
+#     Setting light state to be 1 / zte_srs gpio status = 1 / write() finished
+#     select() timeout   (repeatedly) / read() failed
+#
+# where the same write on a healthy (rebooted) device is answered:
+#
+#     write() finished / read() finished / parse_value():buf[0]=0x52, buf[1]=0x53
+#
+# Every layer ABOVE the HAL reported success either way, because all any of them sees is
+# that the write went out: CNSDK "LensController: did set lens state true", DisplayXR
+# "HW_DBG_CNSDK: backlight -> 3D ON", the OEM app. So the loader/DP markers prove-3d.sh
+# already reads are necessary and NOT sufficient; this is the leg that reads the glass.
+#
+# A pure function over a logcat capture, so it is exercised from the fixtures in
+# android-bundle/tests/ instead of on the pad. Verdicts:
+#   acked        a "state 1" write was answered later in the same capture   -> leg passes
+#   wedged       the HAL logged select() timeout / read() failed            -> FAIL: 2D glass
+#   unacked      a "state 1" write, nothing answered it, no error yet       -> FAIL: same glass
+#   no-3d-write  HAL is talking, but wrote no 3D state in this window       -> not checked
+#   absent       no HAL lines at all -- another OEM platform (the LP2 is)   -> not checked
+# absent/no-3d-write deliberately do NOT fail: no evidence is not evidence of failure, and
+# this harness has to keep running on platforms that do not carry this HAL.
+lens_ack_verdict() {
+    printf '%s\n' "${1:-}" | awk '
+      # Match on the service name only. logcat is read with the default format here, but
+      # the brief format writes "E/<name>(pid):" and threadtime writes " E <name>:", so
+      # keying on the priority field would classify correctly on exactly one of them.
+      /leiadisp@1\.0-service/ {
+        hal = 1
+        if ($0 ~ /select\(\) timeout/ || $0 ~ /read\(\) failed/) { wedged = 1 }
+        if ($0 ~ /Setting light state to be 1/) { wrote = 1; armed = 1; next }
+        # "followed by", not "present": an ack from before the 3D write is the previous
+        # state change answering, and says nothing about this one.
+        if (armed && ($0 ~ /read\(\) finished/ || $0 ~ /parse_value\(\):buf\[0\]=0x52/)) { acked = 1 }
+      }
+      END {
+        if (!hal)   { print "absent";      exit }
+        if (wedged) { print "wedged";      exit }
+        if (acked)  { print "acked";       exit }
+        if (!wrote) { print "no-3d-write"; exit }
+        print "unacked"
+      }'
+}

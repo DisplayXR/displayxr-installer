@@ -29,8 +29,12 @@ jobs:
           # Tier-A allowlist (ALLOW): legitimate names of the vendor hardware /
           # plug-in / SDK / OEM the ecosystem integrates with - like naming NVIDIA in
           # CUDA code. A line containing any of these tokens is permitted.
+          # `leiadisp` is the vendor lens-controller HAL service name
+          # (...leiadisp@1.0-service): prove-3d.sh greps its logcat lines verbatim,
+          # because it is the only layer that knows whether the glass really
+          # switched to 3D, and a grep cannot be neutralized.
           FORBIDDEN="le""ia"
-          ALLOW='cnsdk|leia_cnsdk|libdxrp050_leia_cnsdk|leiasdk|leiasr|displayxr-leia|leia-plugin|leiaplugin|leia_plugin|leia_tag|leia-sr|leia sr|leia hardware|leia display|leia dp|leia android dp|leia sdk|leia plug|leia panel|leia weave|leia face|leia viewer|leia-viewer|leia convention|leia lif|leia heif|leia image format|leiaschema|classic leia|leialoft|leiainc/|leia/sr|LEIA_EXE|LEIA_VER|LEIA_TAG|SecLeia|G_Leia|LeiaUnrealSDK|LeiaPlayerWin|libleiacore|leia_interlacer|headtrackingservice'
+          ALLOW='cnsdk|leia_cnsdk|libdxrp050_leia_cnsdk|leiasdk|leiasr|displayxr-leia|leia-plugin|leiaplugin|leia_plugin|leia_tag|leia-sr|leia sr|leia hardware|leia display|leia dp|leia android dp|leia sdk|leia plug|leia panel|leia weave|leia face|leia viewer|leia-viewer|leia convention|leia lif|leia heif|leia image format|leiaschema|classic leia|leialoft|leiainc/|leia/sr|LEIA_EXE|LEIA_VER|LEIA_TAG|SecLeia|G_Leia|LeiaUnrealSDK|LeiaPlayerWin|libleiacore|leia_interlacer|headtrackingservice|leiadisp'
           hits=$(grep -rniI \
                    --exclude-dir=.git --exclude-dir=.claude \
                    --exclude-dir=openxr --exclude-dir=displayxr-common \
@@ -78,6 +82,19 @@ jobs:
           for f in *.sh; do bash -n "$f" || { echo "::error::$f does not parse"; fail=1; }; done
           [ "$fail" -eq 0 ] || exit 1
           echo "OK: $(echo $fns | wc -w | tr -d ' ') helpers defined once in lib.sh; every caller sources it; all scripts parse."
+
+      - name: Android harness self-tests (fixture-driven, no device)
+        run: |
+          # The harness is otherwise only exercised on the shared pad, which is exactly
+          # why a false PASS survived: on 2026-09-22 prove-3d.sh passed a panel that was
+          # physically 2D. lens_ack_verdict is a pure function over a logcat capture, so
+          # the classification is pinned here from recorded captures instead.
+          fail=0
+          for t in android-bundle/tests/*.sh; do
+            bash -n "$t" || { echo "::error::$t does not parse"; fail=1; continue; }
+            "$t" || fail=1
+          done
+          [ "$fail" -eq 0 ] || exit 1
 
       - name: Workflow YAML is valid
         run: |

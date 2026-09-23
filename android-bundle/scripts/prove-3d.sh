@@ -8,17 +8,19 @@
 #
 #   ./scripts/prove-3d.sh [package]     # default: the Avatar demo
 #
-# PASS needs BOTH positive markers, and NONE of the failure markers:
+# PASS needs ALL THREE positive markers, and NONE of the failure markers:
 #   loader   "[Core-Loader] Successfully initialized in-service library"   CNSDK core loaded
 #   plug-in  "Leia CNSDK DP created (atlas mode)"                          display processor up
+#   panel    a HAL "Setting light state to be 1" that was ANSWERED         lens really switched
 # FAIL on any of:
 #   "[Core-Loader] Invalid load request"          loader != plug-in apiVersion (runtime#1357)
 #   "leia_cnsdk_create failed"  /  "no-DP path"   plug-in gave up -> app renders in 2D
+#   HAL "select() timeout" / "read() failed"      lens controller never answered -> 2D glass
 # Also prints the CNSDK service version the loader reports and the runtime's active
 # plug-in line, so the transcript names what was actually running.
 set -u
 
-. "$(dirname "$0")/lib.sh"        # restore_rotation, task_sz, wait_picker_done, open_mediaplayer_file
+. "$(dirname "$0")/lib.sh"        # restore_rotation, task_sz, wait_picker_done, open_mediaplayer_file, lens_ack_verdict
 require_pad        # refuse if another handle holds /data/local/tmp/pad.lock (PAD_HANDLE=<you> to pass)
 
 trap restore_rotation EXIT
@@ -55,14 +57,41 @@ crash_java=$(printf '%s\n' "$LOG" | grep -A1 'FATAL EXCEPTION' | grep -c "Proces
 crash_native=$(printf '%s\n' "$LOG" | grep -c ">>> $PKG <<<")
 crash=$((crash_java + crash_native))
 horizon=$(printf '%s\n' "$LOG" | grep -c 'PUBLISHED to CNSDK')
+# Third leg: the panel's lens controller must have ANSWERED the HAL's 3D write, not merely
+# been written to. Without this, a bundle installed without the reboot step PASSED on a panel
+# that was physically 2D with a face in view (2026-09-22, K68) -- every layer above the HAL
+# reports success because all it sees is that the write went out. See lens_ack_verdict in
+# lib.sh for the two log shapes. Silent on platforms that carry no such HAL.
+lens=$(lens_ack_verdict "$LOG")
+case "$lens" in
+    acked)       lens_ok=1; lens_say="YES (HAL write answered)" ;;
+    wedged)      lens_ok=0; lens_say="NO -- HAL logged select() timeout / read() failed" ;;
+    unacked)     lens_ok=0; lens_say="NO -- 3D write went out, nothing answered it" ;;
+    no-3d-write) lens_ok=1; lens_say="not checked (HAL up, but no 3D lens write in this capture)" ;;
+    *)           lens_ok=1; lens_say="not checked (no lens-controller HAL on this device)" ;;
+esac
 printf '  %-40s %s\n' "loader initialized in-service core" "$([ "$ok_loader" -gt 0 ] && echo YES || echo NO)"
 printf '  %-40s %s\n' "display processor created" "$([ "$ok_dp" -gt 0 ] && echo YES || echo NO)"
+printf '  %-40s %s\n' "lens controller ACKed the 3D write" "$lens_say"
 printf '  %-40s %s\n' "failure markers" "$bad"
 printf '  %-40s %s\n' "crash markers" "$crash"
 printf '  %-40s %s\n' "#206 horizon published to CNSDK" "$([ "$horizon" -gt 0 ] && echo "YES ($horizon frames)" || echo "no (informational)")"
+if [ "$lens" != absent ]; then
+    echo
+    echo "what the lens-controller HAL said:"
+    printf '%s\n' "$LOG" | grep 'leiadisp@1\.0-service' | sed -E 's/^[^A-Za-z]*//' | cut -c1-150 | tail -8 | sed 's/^/  /'
+fi
 echo
-if [ "$ok_loader" -gt 0 ] && [ "$ok_dp" -gt 0 ] && [ "$bad" -eq 0 ] && [ "$crash" -eq 0 ]; then
-    echo "PASS: 3D pipeline is up in $PKG (CNSDK core loaded, DP created)."
+if [ "$ok_loader" -gt 0 ] && [ "$ok_dp" -gt 0 ] && [ "$lens_ok" -eq 1 ] && [ "$bad" -eq 0 ] && [ "$crash" -eq 0 ]; then
+    echo "PASS: 3D pipeline is up in $PKG (CNSDK core loaded, DP created; lens ack: $lens)."
 else
-    echo "FAIL: 3D is NOT proven in $PKG -- see the lines above."; exit 1
+    echo "FAIL: 3D is NOT proven in $PKG -- see the lines above."
+    if [ "$lens_ok" -eq 0 ]; then
+        echo
+        echo "  The panel's lens controller did not answer the HAL over UART -- the glass is 2D no"
+        echo "  matter what CNSDK and DisplayXR report, and both of them WILL report success here."
+        echo "  Reboot the tablet (power-cycles the HAL + lens MCU) and re-run. If it survives a"
+        echo "  reboot it is a hardware/vendor-service fault, not a DisplayXR one."
+    fi
+    exit 1
 fi

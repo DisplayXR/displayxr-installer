@@ -1,0 +1,11 @@
+D/LeiaSDK ( 9021): LensController: did set lens state true
+W/DisplayXR( 9021): HW_DBG_CNSDK: backlight -> 3D ON
+D/vendor.leia.hardware.leiadisp@1.0-service( 1434): Setting light state to be 1
+D/vendor.leia.hardware.leiadisp@1.0-service( 1434): zte_srs gpio status = 1
+D/vendor.leia.hardware.leiadisp@1.0-service( 1434): write() finished
+E/vendor.leia.hardware.leiadisp@1.0-service( 1434): select() timeout
+E/vendor.leia.hardware.leiadisp@1.0-service( 1434): select() timeout
+E/vendor.leia.hardware.leiadisp@1.0-service( 1434): select() timeout
+E/vendor.leia.hardware.leiadisp@1.0-service( 1434): read() failed
+W/DisplayXR( 9021): [Core-Loader] Successfully initialized in-service library
+W/DisplayXR( 9021): Leia CNSDK DP created (atlas mode)
