@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged over src/main/AndroidManifest.xml for the with-services (cnsdk) build only.
+
+     The two vendor display services need <queries> entries for the same reason the
+     stack's packages do: without them getPackageInfo() throws NameNotFoundException
+     on API 30+ even for an installed package, the service rows would read "not
+     installed" on every tablet (they are BUILT-IN apps, so they are always present),
+     and the installed-vs-carried comparison would never be made. Declared here, not
+     in main, so the standard build asks about nothing it does not install. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <package android:name="com.leialoft.display.config" />
+        <package android:name="com.leia.headtrackingservice" />
+    </queries>
+</manifest>

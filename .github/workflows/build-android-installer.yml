@@ -15,6 +15,16 @@ name: build-android-installer
 # It does NOT download release assets (the app does that at run time, on the
 # tablet), so unlike build-android-bundle.yml it is cheap and safe to run on
 # every PR that touches the module.
+#
+# It builds the STANDARD flavor only — the one that carries no vendor bytes and
+# is therefore publishable. The with-services (cnsdk) flavor embeds APKs from a
+# private vendor repo and is built by build-android-bundle.yml, the one workflow
+# holding that repo's token. Here the cnsdk flavor is only exercised against a
+# synthetic staging directory, to prove the Gradle wiring puts its assets in the
+# cnsdk APK and NOT in the standard one; that fixture APK is never uploaded.
+#
+# publish-bundle.yml calls this via workflow_call, so every public bundle release
+# carries DisplayXR-Installer-<ver>.apk built from the same commit.
 
 on:
   pull_request:
@@ -26,6 +36,20 @@ on:
     paths:
       - 'android-installer/**'
       - '.github/workflows/build-android-installer.yml'
+  workflow_call:
+    inputs:
+      # Declared so the attach step's condition reads a defined, empty value when
+      # called — publish-bundle.yml attaches the APK in its own release job.
+      release_tag:
+        type: string
+        default: ""
+    outputs:
+      version:
+        description: "installerVersionName the APK was built with"
+        value: ${{ jobs.build.outputs.version }}
+      artifact:
+        description: "Name of the uploaded artifact holding the standard APK + .sha256"
+        value: ${{ jobs.build.outputs.artifact }}
   workflow_dispatch:
     inputs:
       release_tag:
@@ -39,6 +63,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      artifact: DisplayXR-Installer-${{ steps.ver.outputs.version }}
     defaults:
       run:
         working-directory: android-installer
@@ -75,8 +102,11 @@ jobs:
           [ -n "$V" ] || { echo "::error::installerVersionName missing from gradle.properties"; exit 1; }
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
+      # Both flavors: the tests are shared, but each flavor compiles its own
+      # BuildConfig and resources, so a flavor that no longer builds would
+      # otherwise surface only in the bundle run.
       - name: Unit tests
-        run: ./gradlew --no-daemon :app:testDebugUnitTest
+        run: ./gradlew --no-daemon :app:testStandardDebugUnitTest :app:testCnsdkDebugUnitTest
 
       # Debug, not release, and deliberately: an unsigned release APK cannot be
       # installed at all, and this repo signs nothing (see CLAUDE.md). The cost
@@ -85,13 +115,67 @@ jobs:
       # INSTALL_FAILED_UPDATE_INCOMPATIBLE — uninstall the old one first. It
       # does not affect anything the installer installs, only the installer.
       - name: Assemble
-        run: ./gradlew --no-daemon :app:assembleDebug
+        run: ./gradlew --no-daemon :app:assembleStandardDebug
+
+      # The standard APK goes on PUBLIC releases, so prove from its bytes that it
+      # carries nothing embedded: no assets/cnsdk/ tree and no nested APK of any
+      # name. Checked on the artifact rather than trusted from the build script,
+      # because a flavor mix-up in Gradle is silent until someone unzips a release.
+      - name: The standard APK carries no vendor bytes
+        run: |
+          set -euo pipefail
+          A=app/build/outputs/apk/standard/debug/app-standard-debug.apk
+          if unzip -Z1 "$A" | grep -E '^assets/cnsdk/|\.apk$'; then
+            echo "::error::the standard installer APK embeds files it must not — it is published on public releases"
+            exit 1
+          fi
+          echo "OK: $(unzip -Z1 "$A" | wc -l) entries, none embedded."
+
+      # The cnsdk flavor's wiring, exercised WITHOUT vendor bytes: a synthetic
+      # staging directory with two placeholder files where the service APKs go.
+      # Proves (a) the flavor packages what the staging names, (b) the packaging
+      # check refuses a staging with no services. Never uploaded.
+      - name: The cnsdk flavor packages its staging (synthetic fixture)
+        run: |
+          set -euo pipefail
+          F="$RUNNER_TEMP/cnsdk-fixture"
+          # Must fail, and for the right reason — a compile error would also "fail".
+          if out=$(./gradlew --no-daemon -q :app:assembleCnsdkDebug 2>&1); then
+            echo "::error::assembleCnsdkDebug succeeded with no staging directory — a with-services build could ship with no services"
+            exit 1
+          fi
+          printf '%s\n' "$out" | grep -q 'cnsdkStagingDir is not set' || {
+            printf '%s\n' "$out" | tail -30
+            echo "::error::assembleCnsdkDebug failed, but not at the staging check"; exit 1; }
+          mkdir -p "$F/cnsdk/apks" "$F/cnsdk/licenses"
+          printf 'fixture-ds' > "$F/cnsdk/apks/device-service-release-0.0.0.apk"
+          printf 'fixture-headtracking' > "$F/cnsdk/apks/headTracking-service-release-0.0.0.apk"
+          for l in LICENSE.txt LICENSE-3RD-PARTY.txt; do echo fixture > "$F/cnsdk/licenses/$l"; done
+          z=$(printf '0%.0s' $(seq 64))
+          {
+            printf 'tag\tv0.0.0\n'
+            printf 'apk\tdevice-service-release-0.0.0.apk\tcom.leialoft.display.config\t0.0.0\t1\t%s\t10\n' "$z"
+            printf 'apk\theadTracking-service-release-0.0.0.apk\tcom.leia.headtrackingservice\t0.0.0\t1\t%s\t20\n' "$z"
+            printf 'license\tLICENSE.txt\nlicense\tLICENSE-3RD-PARTY.txt\n'
+          } > "$F/cnsdk/index.tsv"
+          ./gradlew --no-daemon :app:assembleCnsdkDebug -PcnsdkStagingDir="$F"
+          C=app/build/outputs/apk/cnsdk/debug/app-cnsdk-debug.apk
+          n=$(unzip -Z1 "$C" | grep -cE '^assets/cnsdk/(index\.tsv|apks/.+\.apk|licenses/.+)$' || true)
+          [ "$n" = 5 ] || { echo "::error::the cnsdk APK holds $n of the 5 staged files"; unzip -Z1 "$C" | grep assets/ || true; exit 1; }
+          # The standard APK from the previous step must still be clean after a cnsdk
+          # build in the same tree. (An `if`, not a bare `! pipeline`: set -e ignores a
+          # negated command, so that form could never fail the step.)
+          if unzip -Z1 app/build/outputs/apk/standard/debug/app-standard-debug.apk | grep '^assets/cnsdk/'; then
+            echo "::error::building the cnsdk flavor leaked its assets into the standard APK"; exit 1
+          fi
+          rm -f "$C"
+          echo "OK: cnsdk wiring packages the staging; standard stays clean."
 
       - name: Name the artifact
         id: apk
         run: |
           set -euo pipefail
-          SRC=app/build/outputs/apk/debug/app-debug.apk
+          SRC=app/build/outputs/apk/standard/debug/app-standard-debug.apk
           OUT="DisplayXR-Installer-${{ steps.ver.outputs.version }}.apk"
           mkdir -p _out
           cp "$SRC" "_out/$OUT"

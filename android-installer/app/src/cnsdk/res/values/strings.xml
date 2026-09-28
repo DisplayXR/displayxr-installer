@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Overrides for the with-services (cnsdk) build. Only the strings whose meaning
+     changes when the vendor display services travel inside the APK. -->
+<resources>
+    <!-- A different label because both builds can be installed side by side (the
+         cnsdk build has its own application id), and two launcher icons with one
+         name is how someone runs the one that cannot update the services. -->
+    <string name="app_name">DisplayXR Installer + services</string>
+
+    <string name="subtitle">Updates this tablet\'s display services from the copy inside this
+        installer, installs the pinned DisplayXR stack, and performs the post-install steps that
+        an APK install does not do. Reboot when it finishes.</string>
+
+    <string name="not_automated_title">What this installer does NOT do</string>
+    <string name="not_automated_body">• Each package is confirmed by Android separately. One tap
+        here is still N confirmations — only a device owner or a privileged system app can install
+        silently, and this is neither. The two display services appear as \"an update to this
+        built-in application\"; that is expected.\n\n• It cannot reboot the tablet. When the display
+        services changed you MUST restart it yourself — skipping that can leave the glass flat 2D
+        while every app reports 3D.\n\n• It cannot grant CAMERA to Gaussian Splat or Avatar. Accept
+        the prompt on their first launch, otherwise they open on a consent dialog instead of
+        content.\n\n• After a reboot, UNLOCK the tablet before opening any app. Launching a demo at
+        the lockscreen crashes Model Viewer and Gaussian Splat (displayxr-runtime#1358).\n\n• If an
+        app was installed from a build signed with a different key, Android refuses the upgrade.
+        This installer reports that rather than wiping the app’s data behind your back; uninstall
+        that one app and run again.</string>
+</resources>

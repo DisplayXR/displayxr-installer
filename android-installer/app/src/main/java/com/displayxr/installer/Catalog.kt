@@ -41,6 +41,13 @@ data class Component(
     val opaqueVersionLabel: String? = null,
     /** Picks this component's asset out of the release's asset list. */
     val assetMatch: (String) -> Boolean,
+    /**
+     * Non-null for a component whose APK travels INSIDE this installer instead of
+     * being downloaded — only the vendor display services, and only in the `cnsdk`
+     * flavor. Such a component has no public release to resolve, so [repo],
+     * [pinField] and [assetMatch] are unused for it.
+     */
+    val embedded: EmbeddedApk? = null,
 )
 
 object Catalog {
@@ -153,6 +160,33 @@ object Catalog {
     )
 
     val runtime: Component = COMPONENTS.first { it.id == "runtime" }
+
+    /** Row id prefix of an embedded service, so it can never collide with a download. */
+    const val SERVICE_ID_PREFIX = "service:"
+
+    /**
+     * The full install list for this build: the embedded display services FIRST,
+     * in [EmbeddedServices.SERVICE_ORDER], then the downloaded stack. Services go
+     * before the runtime for the same reason Routes A/B/C install them first — the
+     * runtime and every app talk to them — and because their update is what needs
+     * the reboot at the end of the run.
+     *
+     * With no embedded bundle (the `standard` flavor) this is exactly [COMPONENTS].
+     */
+    fun components(embedded: EmbeddedBundle?): List<Component> {
+        val services = embedded?.services.orEmpty().map { apk ->
+            Component(
+                id = SERVICE_ID_PREFIX + apk.packageName,
+                displayName = EmbeddedServices.displayName(apk.packageName),
+                repo = "",
+                pinField = "cnsdk_services",
+                packageName = apk.packageName,
+                assetMatch = { false },
+                embedded = apk,
+            )
+        }
+        return services + COMPONENTS
+    }
 }
 
 /** Version helpers. Pins are tags (`v2.16.36`); versionName is bare (`2.16.36`). */

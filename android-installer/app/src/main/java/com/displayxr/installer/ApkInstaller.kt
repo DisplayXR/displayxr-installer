@@ -222,13 +222,15 @@ object ApkInstaller {
      */
     fun installed(context: Context, component: Component): Installed {
         val pm = context.packageManager
-        val versionName = try {
-            pm.getPackageInfo(component.packageName, 0).versionName
+        val info = try {
+            pm.getPackageInfo(component.packageName, 0)
         } catch (e: PackageManager.NameNotFoundException) {
             return Installed.Absent
-        } ?: ""
+        }
+        val versionName = info.versionName ?: ""
 
-        val key = component.versionStampKey ?: return Installed.Exact(versionName)
+        val key = component.versionStampKey
+            ?: return Installed.Exact(versionName, info.longVersionCode)
 
         val stamp = try {
             @Suppress("DEPRECATION")
