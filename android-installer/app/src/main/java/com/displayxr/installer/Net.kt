@@ -44,10 +44,12 @@ sealed class InstallerFailure(message: String) : IOException(message) {
             "Retry in about ${maxOf(1L, resetInSeconds / 60)} min."
     )
 
-    /** The stream ended before Content-Length said it would. */
-    class Truncated(name: String, got: Long, expected: Long) : InstallerFailure(
-        "Download of $name ended after $got of $expected bytes. The file on disk is incomplete, " +
-            "so it was discarded rather than handed to the package installer."
+    /** The stream ended before the file was whole. */
+    class Truncated(name: String, got: Long, expected: Long, attempts: Int = 1) : InstallerFailure(
+        "Download of $name ended after $got of ${if (expected > 0) "$expected" else "an unknown number of"} " +
+            "bytes${if (attempts > 1) ", after $attempts attempts that each resumed where the last stopped" else ""}. " +
+            "The file on disk is incomplete, so it was discarded rather than handed to the package " +
+            "installer. Tap \"Retry download + install\" on this row to try again."
     )
 
     class Malformed(what: String, detail: String) :
@@ -100,34 +102,103 @@ object Net {
     }
 
     /**
-     * Download to [dest], reporting progress.
+     * Download to [dest], reporting progress — resuming, not restarting, when the
+     * connection drops.
      *
-     * A short read is an error here, not a smaller file: handing a truncated APK
+     * Found on the NP02J: the ~346 MB browser download ended after 1,686,822 bytes,
+     * "of -1". Two defects in one line. The -1 was a missing Content-Length: the
+     * platform HttpURLConnection asks for gzip on its own and then hides the length
+     * of what it inflates, so a short read could not even be recognised as short.
+     * And one dropped connection discarded everything, with no way to retry from the
+     * screen short of relaunching the app. So:
+     *  - `Accept-Encoding: identity`, and the size the release API reported
+     *    ([expectedSize]) as the length to hold the file to, whatever the headers say;
+     *  - up to [RetryPolicy.maxAttempts] attempts, each resuming with `Range:` from the
+     *    bytes already on disk ([ResumeDecision] decides what the server's answer means);
+     *  - only a FINAL failure deletes the partial file.
+     *
+     * A short read is still an error, never a smaller file: handing a truncated APK
      * to PackageInstaller produces `INSTALL_PARSE_FAILED_*`, which reads as "that
-     * release is broken" rather than "the Wi-Fi dropped". The partial file is
-     * deleted so a retry cannot pick it up.
+     * release is broken" rather than "the Wi-Fi dropped".
      */
     fun download(
         url: String,
         name: String,
         dest: File,
+        expectedSize: Long = -1L,
+        policy: RetryPolicy = RetryPolicy(),
+        sleep: (Long) -> Unit = { Thread.sleep(it) },
+        onRetry: (attempt: Int, failure: InstallerFailure, haveBytes: Long) -> Unit = { _, _, _ -> },
         onProgress: (bytes: Long, total: Long) -> Unit,
     ) {
+        dest.delete()
+        var total = if (expectedSize > 0) expectedSize else -1L
+        var attempt = 0
+        while (true) {
+            attempt++
+            try {
+                if (fetchOnce(url, name, dest, total, onProgress).also { total = it } > 0 &&
+                    dest.length() == total
+                ) return
+                // Unknown length and the stream ended cleanly: nothing to hold it to.
+                if (total <= 0 && dest.length() > 0) return
+                throw InstallerFailure.Truncated(name, dest.length(), total)
+            } catch (e: IOException) {
+                val f = classify(e, url, name, dest.length(), total)
+                if (!policy.retryable(f) || attempt >= policy.maxAttempts) {
+                    val got = dest.length()
+                    dest.delete()
+                    throw if (f is InstallerFailure.Truncated) {
+                        InstallerFailure.Truncated(name, got, total, attempt)
+                    } else f
+                }
+                onRetry(attempt, f, dest.length())
+                sleep(policy.backoffMs(attempt))
+            }
+        }
+    }
+
+    /** One request. Returns the total length it now believes in (-1 = unknown). */
+    private fun fetchOnce(
+        url: String,
+        name: String,
+        dest: File,
+        knownTotal: Long,
+        onProgress: (Long, Long) -> Unit,
+    ): Long {
+        val have = if (dest.exists()) dest.length() else 0L
+        if (knownTotal > 0 && have == knownTotal) return knownTotal
+
         val c = try {
-            open(url, null).also { it.connect() }
+            open(url, null).also {
+                // Without this the platform stack negotiates gzip transparently and
+                // reports Content-Length -1 — the length the NP02J run could not check.
+                it.setRequestProperty("Accept-Encoding", "identity")
+                if (have > 0) it.setRequestProperty("Range", "bytes=$have-")
+                it.connect()
+            }
         } catch (e: UnknownHostException) {
             throw InstallerFailure.Offline(URL(url).host)
-        } catch (e: SocketTimeoutException) {
-            throw InstallerFailure.Timeout(url)
         }
         try {
             val code = c.responseCode
-            if (code !in 200..299) throw InstallerFailure.Http(code, url, "")
-            val total = c.contentLengthLong
-            var written = 0L
+            val decision = ResumeDecision.decide(
+                have = have,
+                code = code,
+                contentRange = c.getHeaderField("Content-Range"),
+                contentLength = c.contentLengthLong,
+                knownTotal = knownTotal,
+            )
+            val (append, total) = when (decision) {
+                is ResumeDecision.Complete -> return decision.total
+                is ResumeDecision.Append -> true to decision.total
+                is ResumeDecision.Restart -> false to decision.total
+                is ResumeDecision.Fail -> throw InstallerFailure.Http(code, url, "")
+            }
+            var written = if (append) have else 0L
             var lastReport = 0L
             c.inputStream.use { input ->
-                FileOutputStream(dest).use { out ->
+                FileOutputStream(dest, append).use { out ->
                     val buf = ByteArray(128 * 1024)
                     while (true) {
                         val n = input.read(buf)
@@ -143,27 +214,97 @@ object Net {
                 }
             }
             onProgress(written, total)
-            if (total > 0 && written != total) {
+            if (total > 0 && written > total) {
+                // More bytes than the file has: whatever is on disk is not that file.
                 dest.delete()
                 throw InstallerFailure.Truncated(name, written, total)
             }
-            if (written == 0L) {
-                dest.delete()
-                throw InstallerFailure.Truncated(name, 0, total)
-            }
-        } catch (e: SocketTimeoutException) {
-            dest.delete()
-            throw InstallerFailure.Timeout(url)
-        } catch (e: IOException) {
-            if (e is InstallerFailure) {
-                dest.delete()
-                throw e
-            }
-            val got = dest.length()
-            dest.delete()
-            throw InstallerFailure.Truncated(name, got, -1)
+            return total
         } finally {
             c.disconnect()
+        }
+    }
+
+    private fun classify(e: IOException, url: String, name: String, got: Long, total: Long): InstallerFailure =
+        when (e) {
+            is InstallerFailure -> e
+            is SocketTimeoutException -> InstallerFailure.Timeout(url)
+            is UnknownHostException -> InstallerFailure.Offline(URL(url).host)
+            else -> InstallerFailure.Truncated(name, got, total)
+        }
+}
+
+/**
+ * How many times a download is attempted and how long to wait in between.
+ *
+ * Retried: a dropped or short stream, a timeout, a lost network, a 5xx. NOT
+ * retried: a 4xx (the URL is wrong or gone — asking again changes nothing) and a
+ * rate limit (asking again makes it worse).
+ */
+data class RetryPolicy(
+    val maxAttempts: Int = 6,
+    val firstBackoffMs: Long = 2_000,
+    val maxBackoffMs: Long = 30_000,
+) {
+    fun backoffMs(attempt: Int): Long =
+        minOf(maxBackoffMs, firstBackoffMs shl (attempt - 1).coerceIn(0, 20))
+
+    fun retryable(f: InstallerFailure): Boolean = when (f) {
+        is InstallerFailure.Truncated, is InstallerFailure.Timeout, is InstallerFailure.Offline -> true
+        is InstallerFailure.Http -> f.code >= 500 || f.code == 408
+        else -> false
+    }
+}
+
+/**
+ * What a server's answer to a (possibly ranged) GET means for the bytes on disk.
+ * Pure, so it is JVM-tested against every answer a server or CDN actually gives.
+ */
+sealed class ResumeDecision {
+    /** 206 from exactly where we are: append. */
+    data class Append(val total: Long) : ResumeDecision()
+
+    /** 200 (Range ignored) or a 206 from somewhere else: start the file over. */
+    data class Restart(val total: Long) : ResumeDecision()
+
+    /** 416 while we already hold every byte: nothing to fetch. */
+    data class Complete(val total: Long) : ResumeDecision()
+
+    data class Fail(val code: Int) : ResumeDecision()
+
+    companion object {
+        private val CONTENT_RANGE = Regex("""bytes\s+(\d+)-(\d+)/(\d+|\*)""")
+
+        /** `bytes 100-199/1000` -> (100, 1000); total null when `*`. */
+        fun parseContentRange(h: String?): Pair<Long, Long?>? {
+            val m = CONTENT_RANGE.find(h ?: return null) ?: return null
+            return m.groupValues[1].toLong() to m.groupValues[3].toLongOrNull()
+        }
+
+        fun decide(have: Long, code: Int, contentRange: String?, contentLength: Long, knownTotal: Long): ResumeDecision {
+            // A known total always wins over headers: it came from the release API and
+            // is the size the file must end up. Headers only fill it in when unknown.
+            fun pick(fromHeaders: Long?): Long =
+                if (knownTotal > 0) knownTotal else (fromHeaders?.takeIf { it > 0 } ?: -1L)
+
+            return when (code) {
+                206 -> {
+                    val cr = parseContentRange(contentRange)
+                    when {
+                        cr == null -> Restart(pick(null))
+                        cr.first == have -> Append(pick(cr.second))
+                        else -> Restart(pick(cr.second))
+                    }
+                }
+
+                in 200..299 -> Restart(pick(contentLength.takeIf { it > 0 }))
+                416 ->
+                    // "Range not satisfiable" for bytes=have- means have >= size. If we know
+                    // the size and hold exactly that, the previous attempt had finished.
+                    if (knownTotal > 0 && have == knownTotal) Complete(knownTotal) else Restart(pick(null))
+
+                else -> Fail(code)
+            }
         }
     }
 }
