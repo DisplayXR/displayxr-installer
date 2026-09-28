@@ -1,7 +1,11 @@
 # Updating a DisplayXR 3D tablet
 
 Everything needed to bring a Leia tablet up to the current CNSDK + displayxr stack.
-Unzip this folder anywhere and follow **one** of the three routes below.
+Unzip this folder anywhere and follow **one** of the routes below.
+
+**Easiest: Route D.** Copy `DisplayXR-Installer-<ver>-with-cnsdk.apk` (top level of this folder)
+to the tablet, tap it, press *Install / update*, confirm each package, **reboot** when it says so.
+No computer, no terminal. Details in [Route D](#route-d--the-installer-app-no-computer-no-terminal).
 
 ---
 
@@ -85,25 +89,45 @@ reason a third party could not do it.
 
 ---
 
-## Route D — the installer app (no computer, no terminal, no zip)
+## Route D — the installer app (no computer, no terminal)
 
-`DisplayXR-Installer-<ver>.apk`, attached to the `android-bundle-<date>` releases. Copy that one
-file to the tablet and tap it. It reads the published pins, downloads each component from its
-GitHub release, installs them in order, and does steps 1 and 2 below for you (step 2 as a
-deep-link — an installer cannot grant an app-op).
+The installer app comes in two builds. Both read the published pins, download the runtime,
+demos and (opt-in) browser from their GitHub releases, install them in order, and do steps 1
+and 2 below for you (step 2 as a deep-link — an installer cannot grant an app-op).
 
-Allow "install unknown apps" for it once when Android asks, and expect **one confirmation per
-package**: only a device owner or a privileged system app can install silently, and it is neither.
-**Unlock the tablet first and leave it awake** — the run ends by opening the runtime, and launching
-an app behind the lockscreen crashes some demos (runtime#1358); the installer now refuses to start
-locked and waits for an unlock before that last step. If a confirmation dialog does not appear, the
-row says so after ~20 s and offers RETRY rather than waiting forever.
+| file | where you get it | display services |
+|---|---|---|
+| `DisplayXR-Installer-<ver>-with-cnsdk.apk` | **top level of this bundle folder** | **included** — installed first, from the copies inside the APK |
+| `DisplayXR-Installer-<ver>.apk` | attached to every public DisplayXR release (`vX.Y.Z`) | not included — do step 1 of Route A/B/C first if the tablet needs them |
 
-It does **not** install the vendor display services (Route A/B/C step 1) — those come from the
-vendor's private repo and install only because they carry the OEM's signing key. If this tablet
-needs a services update, do that part by another route first.
+With this bundle, use the **with-cnsdk** one:
 
-Source and full scope: [`../android-installer/README.md`](../android-installer/README.md).
+1. Copy `DisplayXR-Installer-<ver>-with-cnsdk.apk` to the tablet (USB, cloud drive, anything) and
+   tap it in a file manager. Allow "install unknown apps" for the file manager when Android asks.
+2. **Unlock the tablet and leave it awake.** Open *DisplayXR Installer + services*, allow it to
+   install apps when it asks, then tap **Install / update**.
+3. Expect **one confirmation per package**: only a device owner or a privileged system app can
+   install silently, and it is neither. The two display services show as *"an update to this
+   built-in application"* — that is expected, and it is why they install at all: they carry the
+   OEM's signing key. They go first, device-service then head tracking, then the runtime and apps.
+4. **Reboot when the red card says so.** It appears whenever a display service changed; see
+   [Reboot. It is not optional](#reboot-it-is-not-optional-and-skipping-it-looks-like-nothing-at-all).
+   After the reboot, unlock before opening any app.
+
+What it will and will not do: rows already at the carried/pinned version are skipped; a service
+whose installed build is *newer* than the carried one is skipped (Android refuses a downgrade);
+nothing is ever uninstalled. If a confirmation dialog does not appear, the row says so after ~20 s
+and offers RETRY rather than waiting forever. The run ends by opening the runtime once, and waits
+for an unlocked screen before doing so — launching an app behind the lockscreen crashes some demos
+(runtime#1358). The vendor licence notices (the same files as `licenses/`) are inside the APK too:
+*Licences for the bundled display services*, at the bottom of the screen.
+
+Both builds are currently signed with a per-build debug key, so a newer installer cannot update an
+older one in place: uninstall the old *installer app* first (this does not touch anything it
+installed).
+
+Source and full scope: [`../android-installer/README.md`](../android-installer/README.md) (in the
+`displayxr-installer` repo).
 
 ---
 
@@ -197,8 +221,8 @@ Not seen on the NP02J or the Lume Pad 2; both have more headroom and neither is 
 
 ### 4. UNINSTALL any older DisplayXR Browser before installing this one
 
-**This bundle ships a RELEASE-SIGNED browser (0.1.28; every build since 0.1.25 is).** Every build up to
-and including 0.1.24 was signed with Chromium's debug key. Android identifies an app by
+**This bundle ships a RELEASE-SIGNED browser (every build since 0.1.25 is, including every current
+release).** Every build up to and including 0.1.24 was signed with Chromium's debug key. Android identifies an app by
 its signing key and **refuses an install that changes it** — you get a bare
 *"App not installed"* with nothing naming the cause.
 
@@ -215,15 +239,16 @@ Without the flag the script still detects the mismatch and prints the exact
 One time only; later browser releases upgrade normally. Fixes the OEM App Center refusal some
 testers hit on first launch (browser#188).
 
-Coming from 0.1.25, 0.1.26 or 0.1.27: no uninstall needed, the upgrade is in place.
+Coming from 0.1.25 or later: no uninstall needed, the upgrade is in place.
 
-0.1.28 also fixes the **3D tiles going black after the browser is swiped away and reopened**
-(browser-pvt #34) — on 0.1.26/0.1.27 only a force-stop recovered it. If you see that on
-this bundle, check the installed browser really is 0.1.28 (`scripts/audit-device.sh`).
+Current releases also fix the **3D tiles going black after the browser is swiped away and
+reopened** (browser-pvt #34, fixed in 0.1.28) — on 0.1.26/0.1.27 only a force-stop recovered it.
+If you see that on this bundle, check the installed browser really is the bundled one
+(`scripts/audit-device.sh`).
 
 ### 5. Browser inline-3D — nothing to do (0.1.24 and later)
 
-**The bundled browser 0.1.28 ships inline-3D ON by default.** No adb, no
+**The bundled browser ships inline-3D ON by default** (every release since 0.1.24). No adb, no
 command-line file, no step. Just open the browser.
 
 This step existed for 0.1.23 and earlier, which gated 3D behind `--enable-inline-3d`
@@ -241,7 +266,7 @@ If you are handed an older APK, the old procedure still applies:
 To turn 3D **off** on 0.1.24+, pass `--disable-inline-3d` the same way. An explicit
 `--enable-inline-3d` is harmless — it stays a no-op.
 
-**Still seeing black tiles on 0.1.24?** It is not this flag. Check the runtime and
+**Still seeing black tiles on a current browser?** It is not this flag. Check the runtime and
 CNSDK services are installed and current (sections 1–2) — that is the other cause
 with the same symptom.
 

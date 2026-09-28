@@ -8,6 +8,74 @@ Android offers no NSIS equivalent — an App Bundle or a set of split APKs descr
 app, and `adb install-multiple` installs splits of one app, not a set of apps. So the only way to
 get "one tappable thing" is an app that drives `PackageInstaller` itself.
 
+## Two flavors
+
+One app, built two ways (Gradle product flavors, `app/build.gradle.kts`). Both share
+`installerVersionName`.
+
+| | `standard` | `cnsdk` |
+|---|---|---|
+| file | `DisplayXR-Installer-<ver>.apk` | `DisplayXR-Installer-<ver>-with-cnsdk.apk` |
+| application id | `com.displayxr.installer` | `com.displayxr.installer.cnsdk` |
+| vendor display services | not installed (see below) | **carried inside the APK**, installed first |
+| everything else | downloaded from public releases | same |
+| built by | `build-android-installer.yml` (every PR; called by `publish-bundle.yml`) | `build-android-bundle.yml` only |
+| distributed | **attached to every public bundle release** (`vX.Y.Z`) | **inside the tablet-bundle zip** (top level) + a CI artifact. **Never on a public release.** |
+
+**Why two.** The display services come from a private vendor repo, so the only way an
+installer can offer them is to carry the bytes, and an APK that carries them cannot go on a
+public release. The standard build carries nothing and is therefore publishable; the cnsdk
+build is the easiest route for someone who already receives the private bundle zip.
+
+**How the line is held**, because a flavor mix-up in Gradle is silent until someone unzips a
+release:
+
+- the vendor APKs are never in git; the cnsdk flavor gets them through
+  `-PcnsdkStagingDir=<dir>`, a directory laid out by `scripts/stage-cnsdk.sh`, mounted as an
+  assets root for **that flavor only**;
+- `build-android-installer.yml` builds the cnsdk flavor against a synthetic fixture and checks
+  from the bytes that its assets landed in the cnsdk APK and **not** in the standard one;
+- `publish-bundle.yml` refuses to attach an installer APK whose name says `cnsdk`, that holds an
+  `assets/cnsdk/` tree, or that contains **any** nested `.apk` — judged from the file, not its name;
+- packaging a cnsdk variant **fails** without a complete staging (both services + the licence
+  notices), so a with-services build that silently carries no services cannot be produced. If one
+  ever reaches a tablet anyway, it says so on screen (`BuildConfig.EMBEDS_CNSDK`).
+
+A separate application id lets both sit on one tablet and, while CI signs with a throwaway debug
+key (see *Signing*), means installing one is never a signature-mismatched "update" of the other.
+
+### What the cnsdk flavor adds
+
+- **Two extra rows, first:** device-service (`com.leialoft.display.config`), then head tracking
+  (`com.leia.headtrackingservice`), before the runtime — the order Routes A/B/C use, and
+  device-service first because it is the package that carries the CNSDK core. If device-service
+  fails, head tracking is **not** installed over the old core: the two are one vendor release,
+  and a head-tracking update alone "changes nothing about 3D prediction" while looking done.
+- **Installed vs carried is decided on `versionCode`**, which is what Android's downgrade rule
+  uses and what the vendor sets meaningfully (`290010069` = device-service 0.10.69). "Newer" —
+  the verdict that skips a package — is claimed only when Android itself would refuse the
+  install; a `versionName` never decides it. Same rule as *Versions that cannot be read* below:
+  no consequential verdict on a comparison the code cannot make, and no uninstall anywhere.
+  (`servicePlannedStatus`, JVM-tested in `EmbeddedServicesTest`.)
+- **Integrity before install:** each APK is copied out of the assets and re-hashed against the
+  index `stage-cnsdk.sh` generated from the real files (package, versionName, versionCode read
+  with aapt2; sha256 and size of the staged bytes). A truncated or substituted asset is refused
+  with a sentence, not handed to Android to fail as an opaque "invalid APK".
+- **The reboot.** When a service actually changed, a red card stays at the top: *Reboot the
+  tablet now — it is not optional.* Skipping it is invisible — the lens-controller HAL can be left
+  not answering, every app weaves and tracks, everything reports 3D, and the glass stays 2D
+  (`../android-bundle/INSTALL.md`, "Reboot. It is not optional"). An app cannot reboot a tablet,
+  so it tells the owner, and keeps telling them after the launch-once step returns.
+- **Licences.** The services statically link libzmq (modified LGPLv3, whose static-link exception
+  still requires the notice to accompany the binary), Eigen (MPL-2.0) and Apache-2.0 components.
+  An APK that embeds them is a distribution of them, so the same four files the bundle zip ships
+  (`LICENSE.txt`, `LICENSE-3RD-PARTY.txt`, `ZMQ.AUTHORS.txt`, `SIMDJSON.AUTHORS.txt`) are embedded
+  under `assets/cnsdk/licenses/` and readable in-app via *Licences for the bundled display
+  services*. Staging refuses to proceed without them.
+- **A newer published pin.** If `versions.json`'s `cnsdk_services` has moved past what the APK
+  carries, the rows say so; the installer still installs what it carries (it cannot fetch the
+  private release) — get a newer with-services installer for the new pin.
+
 ## Why it downloads instead of embedding
 
 It reads `versions.json` from `DisplayXR/displayxr-installer@main` — the same mirrored pin matrix
@@ -49,9 +117,11 @@ why the step exists — please keep them attached to the code.
   a privileged system app, and this is neither. One tap here is still N confirmations. The app asks
   for `USER_ACTION_NOT_REQUIRED`, which Android honours only for updating a package this installer
   itself installed — so a second run is quieter than the first, and that is all.
-- **The vendor display services are out of scope.** They come from a private vendor repo and install
-  as built-in-app updates only because they carry the OEM's signing key. This installer cannot fetch
-  them and does not pretend it can.
+- **The standard flavor does not install the vendor display services.** They come from a private
+  vendor repo and install as built-in-app updates only because they carry the OEM's signing key.
+  The standard build cannot fetch them and does not pretend it can; the `cnsdk` flavor carries
+  them (see *Two flavors*).
+- **It cannot reboot the tablet.** The cnsdk flavor tells the owner to, when the services changed.
 - **It cannot grant CAMERA** to Gaussian Splat or Avatar. Accept the prompt on first launch.
 - **It cannot unlock the tablet.** After a reboot, unlock before opening any app —
   launching a demo at the lockscreen crashes Model Viewer and Gaussian Splat
@@ -178,21 +248,57 @@ Local, from a checkout (needs a JDK 17+ and an Android SDK; `ANDROID_HOME` must 
 
 ```bash
 cd android-installer
-./gradlew :app:testDebugUnitTest :app:assembleDebug
-# -> app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:testStandardDebugUnitTest :app:testCnsdkDebugUnitTest :app:assembleStandardDebug
+# -> app/build/outputs/apk/standard/debug/app-standard-debug.apk
+
+# with-services: stage the pinned vendor APKs + licences (e.g. from an unpacked tablet bundle)
+scripts/stage-cnsdk.sh --tag v0.10.69 \
+    --apks <bundle>/apks/1-cnsdk-services --licenses <bundle>/licenses --out /tmp/cnsdk-staging
+./gradlew :app:assembleCnsdkDebug -PcnsdkStagingDir=/tmp/cnsdk-staging
+# -> app/build/outputs/apk/cnsdk/debug/app-cnsdk-debug.apk   (~68 MB; never commit, never publish)
 ```
 
-CI: `.github/workflows/build-android-installer.yml` runs the same two tasks on every PR that touches
-this directory, and names the artifact `DisplayXR-Installer-<installerVersionName>.apk` from
-`gradle.properties` — one property drives both the version inside the APK and the file name outside
-it. Dispatch it with a `release_tag` to attach the APK to an existing `android-bundle-<date>`
-release.
+CI:
 
-**Debug-signed, and the consequence is real:** this repo signs nothing, and an *unsigned* release APK
-cannot be installed at all, so CI ships the debug variant. Each CI run signs with that runner's
-throwaway debug key, so **upgrading the installer app itself in place fails** with
+- `.github/workflows/build-android-installer.yml` runs on every PR that touches this directory:
+  both flavors' unit tests, the standard APK, the no-vendor-bytes check, and the cnsdk wiring
+  against a synthetic fixture. It names the artifact `DisplayXR-Installer-<installerVersionName>.apk`
+  from `gradle.properties` — one property drives both the version inside the APK and the file name
+  outside it. Dispatch it with a `release_tag` to attach the standard APK to an existing release.
+- `publish-bundle.yml` calls it (`workflow_call`) and attaches the standard APK + `.sha256` to
+  **every** `vX.Y.Z` bundle release, after re-checking the bytes carry nothing embedded.
+- `build-android-bundle.yml` builds the cnsdk flavor from the very service APKs and licences the
+  bundle ships (byte-equality checked on the built APK), puts it at the top of the bundle folder,
+  lists it in `MANIFEST.md`, and uploads it as its own CI artifact. It is not attached to any release.
+
+## Signing
+
+**Debug-signed today, and the consequence is real.** This repo signs nothing, and an *unsigned*
+release APK cannot be installed at all, so CI ships the debug variant. Each CI run signs with that
+runner's **throwaway** debug key, so **upgrading the installer app itself in place fails** with
 `INSTALL_FAILED_UPDATE_INCOMPATIBLE` — uninstall the old installer first. This affects only the
 installer; everything it installs is release-signed by its own repo and upgrades normally.
+
+It matters more now that the installer is on every public release: it is meant to be kept and
+re-run, and it also asks Android for `USER_ACTION_NOT_REQUIRED`, which is honoured only for
+packages it installed itself — a reinstalled installer loses that.
+
+Proposed path (not implemented; needs the repo owner to create a key and secrets):
+
+1. Generate one long-lived upload key for `com.displayxr.installer` (and use the same key for
+   `.cnsdk`): `keytool -genkeypair -v -keystore dxr-installer.jks -alias dxr-installer -keyalg RSA
+   -keysize 4096 -validity 36500`. Back it up offline — **losing it strands every installed copy**,
+   exactly the failure above, permanently.
+2. Store it as repo secrets: `ANDROID_INSTALLER_KEYSTORE_B64`, `ANDROID_INSTALLER_KEYSTORE_PASSWORD`,
+   `ANDROID_INSTALLER_KEY_ALIAS`, `ANDROID_INSTALLER_KEY_PASSWORD`.
+3. Add a `release` `signingConfig` in `app/build.gradle.kts` that reads those from the environment
+   and only exists when they are set, so forks and PRs from forks still build debug.
+4. In CI, build `assembleStandardRelease` / `assembleCnsdkRelease` when the secrets are present,
+   debug otherwise, and verify the signer with `apksigner verify --print-certs` against a pinned
+   certificate digest before publishing — a key swap should fail the release, not the tablet.
+
+Never commit a keystore, not even a "debug" one: an installer holding `REQUEST_INSTALL_PACKAGES`
+signed with a public key can be updated by anyone to install anything.
 
 ## Minimum SDK
 
@@ -205,9 +311,12 @@ Lume Pad 2.
 ```
 android-installer/
 ├── gradle.properties            installerVersionName / installerVersionCode
+├── scripts/stage-cnsdk.sh       stages the vendor service APKs + licences for the cnsdk flavor
+├── app/src/cnsdk/               cnsdk-only manifest (<queries> for the services) + string overrides
 └── app/src/main/java/com/displayxr/installer/
     ├── Catalog.kt               the component table — mirrors install-android-bundle.sh
-    ├── UiModel.kt               row/phase model + plannedStatus (pure, JVM-tested)
+    ├── UiModel.kt               row/phase model + plannedStatus / servicePlannedStatus (pure, JVM-tested)
+    ├── EmbeddedServices.kt      the cnsdk flavor's carried services: index, order, verified copy
     ├── ConfirmationWatchdog.kt  the pending-user-action deadline (pure, JVM-tested)
     ├── Net.kt                   HTTP + every typed failure the UI can show
     ├── GitHubReleases.kt        versions.json + pin -> release asset
