@@ -19,6 +19,17 @@ name: build-android-bundle
 #
 # Trigger is workflow_dispatch only, never push: it downloads ~500 MB of release assets
 # and reaches a private repo for the vendor display services.
+#
+# It also builds the WITH-SERVICES Android installer, DisplayXR-Installer-<ver>-with-cnsdk.apk
+# (android-installer/, cnsdk flavor): the same tappable installer that goes on public
+# releases, plus the two vendor display-service APKs this run downloaded, embedded as
+# assets and installed first. It is built HERE because this is the one workflow that
+# holds the private repo's token, and from the very files the bundle ships, so the zip
+# cannot carry one build of the services loose and another inside the installer. It
+# goes (a) into the bundle folder, top level, and (b) up as its own CI artifact.
+# It is NEVER attached to a release on its own: it redistributes private vendor
+# binaries, and only the bundle zip — which already carries those binaries and their
+# licences — may travel with it.
 
 on:
   workflow_dispatch:
@@ -243,6 +254,71 @@ jobs:
           n=$(find apks -name '*.apk' | wc -l | tr -d ' ')
           [ "$n" = 9 ] || { echo "::error::bundle holds $n APKs, expected 9"; find apks -name '*.apk' | sort | sed 's/^/      /'; fail=1; }
           [ "$fail" -eq 0 ] || exit 1
+
+      # ---------------------------------------------------------------------------
+      # The with-services installer. Built from apks/1-cnsdk-services/ + licenses/ of
+      # THIS bundle, after the completeness assert above, so it embeds exactly the
+      # service APKs the zip ships loose — never a second download of them.
+      # ---------------------------------------------------------------------------
+      # Same toolchain steps as build-android-installer.yml, for the same reasons
+      # (see the comments there): a validated wrapper jar, and packages: '' because
+      # the action's default `tools` package no longer exists.
+      - uses: gradle/actions/wrapper-validation@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: ''
+
+      - name: Build the with-services installer (cnsdk flavor)
+        run: |
+          set -euo pipefail
+          V=$(grep -E '^installerVersionName=' android-installer/gradle.properties | cut -d= -f2 | tr -d '[:space:]')
+          [ -n "$V" ] || { echo "::error::installerVersionName missing from android-installer/gradle.properties"; exit 1; }
+          OUT="DisplayXR-Installer-$V-with-cnsdk.apk"
+          b="_bundle/$BUNDLE"
+          stage="$RUNNER_TEMP/cnsdk-staging"
+
+          # stage-cnsdk.sh reads package/versionName/versionCode out of each APK with
+          # aapt2, refuses a service whose versionName is not the pinned tag, refuses to
+          # embed without the licence notices, and hashes the exact bytes it stages.
+          AAPT2="$AAPT2" android-installer/scripts/stage-cnsdk.sh \
+            --tag "$CNSDK_TAG" --apks "$b/apks/1-cnsdk-services" --licenses "$b/licenses" --out "$stage"
+
+          ( cd android-installer && ./gradlew --no-daemon \
+              :app:testCnsdkDebugUnitTest :app:assembleCnsdkDebug -PcnsdkStagingDir="$stage" )
+          A=android-installer/app/build/outputs/apk/cnsdk/debug/app-cnsdk-debug.apk
+
+          # The embedded services are byte-identical to the ones the bundle ships loose.
+          # Compared on the APK that was built, not on the staging it was built from.
+          for f in "$b"/apks/1-cnsdk-services/*.apk; do
+            n=$(basename "$f")
+            want=$(shasum -a 256 "$f" | cut -d' ' -f1)
+            got=$(unzip -p "$A" "assets/cnsdk/apks/$n" | shasum -a 256 | cut -d' ' -f1)
+            [ "$want" = "$got" ] || { echo "::error::$n inside $OUT ($got) is not the bundle's copy ($want)"; exit 1; }
+            echo "  embedded == bundle: $n  $got"
+          done
+          # Listed once into a variable: `unzip | grep -q` under pipefail fails whenever
+          # grep exits early and unzip dies of SIGPIPE — a false "missing".
+          entries=$(unzip -Z1 "$A")
+          for l in LICENSE.txt LICENSE-3RD-PARTY.txt ZMQ.AUTHORS.txt SIMDJSON.AUTHORS.txt; do
+            printf '%s\n' "$entries" | grep -qx "assets/cnsdk/licenses/$l" || { echo "::error::$OUT does not carry $l — it redistributes LGPL/MPL/Apache binaries"; exit 1; }
+          done
+
+          # Top level of the bundle folder, beside INSTALL.md: it is the easiest route.
+          # NOT under apks/ — every harness script sweeps apks/*/*.apk, and an installer
+          # APK there would be installed by install-from-computer.sh as if it were part
+          # of the stack (and break the nine-APK count the gates assert).
+          cp "$A" "$b/$OUT"
+          mkdir -p _installer
+          cp "$A" "_installer/$OUT"
+          ( cd _installer && shasum -a 256 "$OUT" > "$OUT.sha256" )
+          echo "INSTALLER_APK=$OUT" >> "$GITHUB_ENV"
+          ls -l "$b/$OUT"
 
       - name: Lay out the harness beside the APKs
         run: |
@@ -488,6 +564,19 @@ jobs:
             echo "\`version\` is the \`versionName\` inside the APK; several demos never bump it."
             echo "The authoritative version of each component is the release **tag** column."
             echo
+            echo "## The installer app — the easiest route"
+            echo
+            echo "\`$INSTALLER_APK\` (top level of this folder) is INSTALL.md Route D: copy it to the"
+            echo "tablet, tap it, and it installs the two display services **from the copies inside it**"
+            echo "(byte-identical to \`apks/1-cnsdk-services/\`, checked in CI), then downloads the pinned"
+            echo "runtime, demos and browser from their public releases. Reboot when it says so."
+            echo "Its licence view shows the four files in \`licenses/\`, which it carries as well."
+            echo
+            echo "| file | package | version | sha256 | size | built from |"
+            echo "|---|---|---|---|---|---|"
+            ibadge=$("$AAPT2" dump badging "$INSTALLER_APK" 2>/dev/null | awk -F"'" '/^package: name=/{print $2"|"$6}' | tr -d '\n')
+            echo "| \`$INSTALLER_APK\` | \`${ibadge%%|*}\` | ${ibadge##*|} | \`$(shasum -a 256 "$INSTALLER_APK" | cut -d' ' -f1)\` | $(du -h "$INSTALLER_APK" | cut -f1) | displayxr-installer @ $(git rev-parse --short HEAD), \`android-installer/\` cnsdk flavor |"
+            echo
             echo "## Install order"
             echo
             echo '```'
@@ -506,6 +595,7 @@ jobs:
           rows=$(grep -c '^| `apks/' MANIFEST.md || true)
           [ "$rows" = 9 ] || { echo "::error::MANIFEST.md lists $rows APKs, expected 9 — generation stopped early"; exit 1; }
           grep -q 'NOT hardware-verified' MANIFEST.md || { echo "::error::MANIFEST.md lost its verification caveat"; exit 1; }
+          grep -q "^| \`$INSTALLER_APK\` | \`com.displayxr.installer.cnsdk\`" MANIFEST.md || { echo "::error::MANIFEST.md has no row for $INSTALLER_APK"; exit 1; }
           for f in LICENSE-3RD-PARTY.txt LICENSE.txt ZMQ.AUTHORS.txt SIMDJSON.AUTHORS.txt; do
             [ -s "licenses/$f" ] || { echo "::error::licenses/$f absent at pack time — refusing to ship LGPL/MPL/Apache binaries without their notices"; exit 1; }
           done
@@ -526,6 +616,17 @@ jobs:
             ${{ env.BUNDLE }}.zip.sha256
           retention-days: 14
           compression-level: 0   # already a zip; recompressing ~500 MB buys nothing
+
+      # The with-services installer on its own: private, CI-artifact only. It is
+      # deliberately absent from the release step below — see the header.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.INSTALLER_APK }}
+          path: |
+            _installer/${{ env.INSTALLER_APK }}
+            _installer/${{ env.INSTALLER_APK }}.sha256
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Attach to a release
         if: ${{ inputs.publish }}
