@@ -62,6 +62,15 @@ else
     fi
     for p in $DXR_PKGS; do
         note=""
+        case "$p" in
+            # The installer app itself (android-installer/, both flavors). It installs the
+            # stack rather than being part of it, and the with-services build sits at the TOP
+            # of the bundle folder, not under apks/, so the sweep above never sees it. Flagging
+            # it as a leftover sends the operator hunting for a stale bundle that is not there.
+            com.displayxr.installer|com.displayxr.installer.cnsdk)
+                show "$p" "$(ver "$p" 2>/dev/null || true)   (the DisplayXR installer app)"
+                continue ;;
+        esac
         if [ -n "$BUNDLE_PKGS" ]; then
             case " $BUNDLE_PKGS " in
                 *" $p "*) : ;;

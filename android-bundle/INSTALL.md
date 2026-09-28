@@ -110,6 +110,9 @@ With this bundle, use the **with-cnsdk** one:
    install silently, and it is neither. The two display services show as *"an update to this
    built-in application"* — that is expected, and it is why they install at all: they carry the
    OEM's signing key. They go first, device-service then head tracking, then the runtime and apps.
+   After a display-service update Android may show its own **"App installed — DONE / OPEN"**
+   screen: tap **DONE** (not OPEN). The installer tries to come back on top by itself and waits
+   for it before the next package.
 4. **Reboot when the red card says so.** It appears whenever a display service changed; see
    [Reboot. It is not optional](#reboot-it-is-not-optional-and-skipping-it-looks-like-nothing-at-all).
    After the reboot, unlock before opening any app.
@@ -117,7 +120,9 @@ With this bundle, use the **with-cnsdk** one:
 What it will and will not do: rows already at the carried/pinned version are skipped; a service
 whose installed build is *newer* than the carried one is skipped (Android refuses a downgrade);
 nothing is ever uninstalled. If a confirmation dialog does not appear, the row says so after ~20 s
-and offers RETRY rather than waiting forever. The run ends by opening the runtime once, and waits
+and offers RETRY rather than waiting forever. A dropped download resumes by itself; if it still
+fails, the row gets a **Retry download + install** button. The browser checkbox and the reboot
+reminder survive closing and reopening the app. The run ends by opening the runtime once, and waits
 for an unlocked screen before doing so — launching an app behind the lockscreen crashes some demos
 (runtime#1358). The vendor licence notices (the same files as `licenses/`) are inside the APK too:
 *Licences for the bundled display services*, at the bottom of the screen.
