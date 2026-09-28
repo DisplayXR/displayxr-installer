@@ -8,6 +8,7 @@ import android.provider.Settings
 import android.view.View
 import android.view.WindowManager
 import androidx.activity.viewModels
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -35,6 +36,7 @@ class MainActivity : AppCompatActivity() {
         ui.unknownSourcesBtn.setOnClickListener { openUnknownSourcesSettings() }
         ui.overlayBtn.setOnClickListener { openRuntimeOverlaySettings() }
         ui.runtimeLaunchBtn.setOnClickListener { vm.launchRuntimeOnce() }
+        ui.licensesBtn.setOnClickListener { showLicenses() }
         ui.browserOptIn.setOnCheckedChangeListener { _, checked -> vm.setBrowserOptIn(checked) }
 
         ui.installBtn.setOnClickListener {
@@ -88,6 +90,8 @@ class MainActivity : AppCompatActivity() {
 
         ui.errorCard.visibility = if (s.globalError == null) View.GONE else View.VISIBLE
         ui.errorText.text = s.globalError.orEmpty()
+        ui.rebootCard.visibility = if (s.rebootRequired) View.VISIBLE else View.GONE
+        ui.licensesBtn.visibility = if (s.hasEmbeddedServices) View.VISIBLE else View.GONE
 
         for (row in s.rows) renderRow(row)
 
@@ -141,6 +145,7 @@ class MainActivity : AppCompatActivity() {
             // compared: Installed.label() prints "unknown (Chromium 154.0.…)".
             append("   installed ").append(row.installed.label())
             row.asset?.let { append("\n").append(it.name) }
+            row.component.embedded?.let { append("\n").append(it.fileName).append("  (inside this installer)") }
         }
 
         val (label, color) = statusLabel(row)
@@ -189,11 +194,16 @@ class MainActivity : AppCompatActivity() {
         RowStatus.UPDATE_UNVERIFIABLE -> "Will install the pinned build" to R.color.dxr_accent
         RowStatus.UP_TO_DATE -> "Up to date" to R.color.dxr_ok
         RowStatus.NEWER_INSTALLED ->
-            "Installed build is newer than the pin. Android refuses a downgrade, so this is " +
-                "skipped." to R.color.dxr_warn
+            (if (row.component.embedded != null)
+                "Installed build is newer than the one inside this installer. Android refuses a " +
+                    "downgrade, so this is skipped."
+            else
+                "Installed build is newer than the pin. Android refuses a downgrade, so this is " +
+                    "skipped.") to R.color.dxr_warn
         RowStatus.BLOCKED -> "Refused" to R.color.dxr_error
         RowStatus.SKIPPED -> "Not selected" to R.color.dxr_muted
-        RowStatus.DOWNLOADING -> "Downloading…" to R.color.dxr_accent
+        RowStatus.DOWNLOADING ->
+            (if (row.component.embedded != null) "Unpacking…" else "Downloading…") to R.color.dxr_accent
         RowStatus.INSTALLING -> "Installing — confirm on screen" to R.color.dxr_accent
         RowStatus.CONFIRM_STALLED -> "Waiting — no confirmation appeared" to R.color.dxr_warn
         RowStatus.DONE -> "Installed" to R.color.dxr_ok
@@ -213,6 +223,23 @@ class MainActivity : AppCompatActivity() {
             null -> "This installer cannot read another app's app-op, so it cannot tell you " +
                 "whether this is already on. Open the screen and look."
         }
+    }
+
+    /** Pick a licence file, then show it. Plain dialogs: nothing here needs more. */
+    private fun showLicenses() {
+        val names = vm.embeddedLicenses()
+        if (names.isEmpty()) return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.btn_licenses)
+            .setItems(names.toTypedArray()) { _, i ->
+                AlertDialog.Builder(this)
+                    .setTitle(names[i])
+                    .setMessage(vm.readLicense(names[i]))
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     // -------------------------------------------------------------- settings

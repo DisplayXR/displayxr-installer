@@ -14,6 +14,14 @@
     <string name="btn_open_runtime">Open the runtime once</string>
     <string name="btn_retry_confirm">Retry — ask Android for the confirmation again</string>
 
+    <string name="btn_licenses">Licences for the bundled display services</string>
+
+    <string name="reboot_title">Reboot the tablet now — it is not optional</string>
+    <string name="reboot_body">The display services were updated. Until the tablet restarts, the
+        display\'s lens controller can be left not answering: every app weaves and tracks your face,
+        everything reports 3D, and the glass stays flat 2D. Hold the power button → Restart. After
+        the restart, UNLOCK the tablet before opening any app.</string>
+
     <string name="unknown_sources_title">One permission first</string>
     <string name="unknown_sources_body">Android will not let this app install anything until you
         allow it to install unknown apps. Nothing can be pre-granted here — Android requires the

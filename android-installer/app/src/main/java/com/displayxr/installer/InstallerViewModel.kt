@@ -14,13 +14,59 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.IOException
 
 class InstallerViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val _state = MutableStateFlow(UiState(rows = Catalog.COMPONENTS.map { RowState(it) }))
+    private val ctx get() = getApplication<Application>()
+
+    /**
+     * The display services this build carries, if any (the `cnsdk` flavor).
+     *
+     * A build that is SUPPOSED to carry them and does not — or whose index is
+     * damaged — is reported on screen and installs no services at all, rather
+     * than quietly behaving like the standard installer: the owner of a
+     * with-services build has been told it updates the services, and a run that
+     * silently did not is exactly the "looks done, glass stays 2D" outcome.
+     */
+    private val embedded: EmbeddedBundle?
+    private val embeddedError: String?
+
+    init {
+        var bundle: EmbeddedBundle? = null
+        var err: String? = null
+        try {
+            bundle = EmbeddedServices.load(app)
+            if (bundle == null && BuildConfig.EMBEDS_CNSDK) {
+                err = "This is the with-services build, but it carries no display services. " +
+                    "The build is defective; the services will NOT be installed by this run."
+            }
+        } catch (e: Exception) {
+            err = "The display services inside this installer could not be read (${e.message}). " +
+                "They will NOT be installed by this run."
+        }
+        embedded = bundle
+        embeddedError = err
+    }
+
+    /** Everything this build installs, in order: embedded services first. */
+    private val components: List<Component> = Catalog.components(embedded)
+
+    private val _state = MutableStateFlow(
+        UiState(
+            rows = components.map { RowState(it) },
+            hasEmbeddedServices = embedded != null,
+            globalError = embeddedError,
+        )
+    )
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    private val ctx get() = getApplication<Application>()
+    /** Licence files shipped with the embedded services (empty in the standard build). */
+    fun embeddedLicenses(): List<String> = embedded?.licenses.orEmpty()
+
+    fun readLicense(name: String): String =
+        runCatching { EmbeddedServices.readLicense(ctx, name) }
+            .getOrElse { "Could not read $name: ${it.message}" }
 
     // ---------------------------------------------------------------- resolve
 
@@ -29,7 +75,7 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { s ->
             s.copy(
                 phase = Phase.RESOLVING,
-                globalError = null,
+                globalError = embeddedError,
                 summary = "Reading the pinned versions…",
                 rows = s.rows.map { it.copy(status = RowStatus.RESOLVING, detail = "", progressPercent = -1) },
             )
@@ -46,7 +92,10 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                     s.copy(
                         phase = Phase.IDLE,
                         summary = "",
-                        globalError = "Could not read the pinned versions.\n\n${e.message}",
+                        globalError = listOfNotNull(
+                            "Could not read the pinned versions.\n\n${e.message}",
+                            embeddedError,
+                        ).joinToString("\n\n"),
                         rows = s.rows.map { it.copy(status = RowStatus.PENDING) },
                     )
                 }
@@ -55,13 +104,32 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
 
             _state.update {
                 it.copy(
-                    pinSource = "pins: ${Catalog.PINS_REPO}@${Catalog.PINS_REF}   runtime ${pins["runtime"]}"
+                    pinSource = buildString {
+                        append("pins: ${Catalog.PINS_REPO}@${Catalog.PINS_REF}   runtime ${pins["runtime"]}")
+                        embedded?.let { e -> append("\ndisplay services: CNSDK ${e.tag}, carried inside this installer") }
+                    }
                 )
             }
 
-            for (c in Catalog.COMPONENTS) {
-                val pin = pins[c.pinField]?.takeIf { it.isNotBlank() }
+            for (c in components) {
                 val installed = ApkInstaller.installed(ctx, c)
+
+                // An embedded service has no release to resolve: the bytes are in
+                // this APK, so "the pin" is the build that is actually carried.
+                val apk = c.embedded
+                if (apk != null) {
+                    setRow(c) {
+                        it.copy(
+                            pin = apk.versionName,
+                            installed = installed,
+                            status = servicePlannedStatus(installed, apk),
+                            detail = serviceNote(pins["cnsdk_services"]),
+                        )
+                    }
+                    continue
+                }
+
+                val pin = pins[c.pinField]?.takeIf { it.isNotBlank() }
                 if (pin == null) {
                     setRow(c) {
                         it.copy(
@@ -96,6 +164,20 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
      * The one row note that has to survive: when a component's installed version
      * cannot be read, say so and say what the number on screen actually is.
      */
+    /**
+     * The one thing worth saying about an embedded service before the run: when the
+     * published pin has moved past what this installer carries. It still installs
+     * what it carries — a newer vendor build cannot be fetched from here, and the
+     * carried one is a matched, gated pair — but the owner should know a newer
+     * with-services installer exists.
+     */
+    private fun serviceNote(publishedPin: String?): String {
+        val tag = embedded?.tag ?: return ""
+        if (publishedPin.isNullOrBlank() || Versions.same(publishedPin, tag)) return ""
+        return "versions.json now pins CNSDK $publishedPin; this installer carries $tag. It installs " +
+            "what it carries — get a newer with-services installer for $publishedPin."
+    }
+
     private fun detailFor(c: Component, installed: Installed): String = when (installed) {
         is Installed.Opaque ->
             "The installed build's DisplayXR version is not readable — ${installed.shown} is the " +
@@ -213,13 +295,33 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        _state.update { it.copy(phase = Phase.RUNNING, globalError = null, summary = "Working…") }
+        _state.update { it.copy(phase = Phase.RUNNING, globalError = embeddedError, summary = "Working…") }
 
         viewModelScope.launch(Dispatchers.IO) {
             var installedCount = 0
             var failedCount = 0
+            // The two services are ONE vendor release. If device-service — the
+            // package that carries the CNSDK core — failed, head tracking is not
+            // installed over the old core: that update "changes nothing about 3D
+            // prediction" while making the tablet look updated.
+            var coreServiceFailed = false
 
-            for (c in Catalog.COMPONENTS) {
+            for (c in components) {
+                if (c.embedded != null && c.packageName != EmbeddedServices.SERVICE_ORDER[0] && coreServiceFailed) {
+                    val r = _state.value.rows.first { it.component.id == c.id }
+                    if (r.status in PLANNED_STATUSES) {
+                        setRow(c) {
+                            it.copy(
+                                status = RowStatus.FAILED,
+                                detail = "Not installed, because the display service above did not. " +
+                                    "The two are one vendor release and are installed as a pair.",
+                            )
+                        }
+                        failedCount++
+                    }
+                    continue
+                }
+
                 if (c.id == "browser") {
                     // Re-evaluated here, not only at planning time: the runtime
                     // leg may just have changed the answer, in either direction.
@@ -239,20 +341,26 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
 
                 val row = _state.value.rows.first { it.component.id == c.id }
                 val asset = row.asset
-                if (asset == null || row.status !in PLANNED_STATUSES) continue
+                val carried = c.embedded
+                if ((asset == null && carried == null) || row.status !in PLANNED_STATUSES) continue
 
-                val apk = File(ctx.cacheDir, asset.name)
+                val apk = File(ctx.cacheDir, carried?.fileName ?: asset!!.name)
                 apk.delete()
 
-                setRow(c) {
-                    it.copy(status = RowStatus.DOWNLOADING, progressPercent = 0, detail = asset.name)
-                }
                 try {
-                    Net.download(asset.url, asset.name, apk) { got, total ->
-                        val pct = if (total > 0) ((got * 100) / total).toInt() else -1
-                        setRow(c) { it.copy(progressPercent = pct) }
+                    if (carried != null) {
+                        setRow(c) { it.copy(status = RowStatus.DOWNLOADING, progressPercent = -1, detail = "Unpacking ${carried.fileName}") }
+                        EmbeddedServices.extract(ctx, carried, apk)
+                    } else {
+                        setRow(c) {
+                            it.copy(status = RowStatus.DOWNLOADING, progressPercent = 0, detail = asset!!.name)
+                        }
+                        Net.download(asset!!.url, asset.name, apk) { got, total ->
+                            val pct = if (total > 0) ((got * 100) / total).toInt() else -1
+                            setRow(c) { it.copy(progressPercent = pct) }
+                        }
                     }
-                } catch (e: InstallerFailure) {
+                } catch (e: IOException) {
                     setRow(c) {
                         it.copy(
                             status = RowStatus.FAILED,
@@ -261,6 +369,7 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     }
                     failedCount++
+                    if (carried != null && c.packageName == EmbeddedServices.SERVICE_ORDER[0]) coreServiceFailed = true
                     if (c.id == "runtime") {
                         stopRun(
                             "The runtime could not be downloaded, so nothing after it was " +
@@ -310,13 +419,22 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                             it.copy(
                                 status = RowStatus.DONE,
                                 installed = ApkInstaller.installed(ctx, c),
-                                detail = "Installed.",
+                                detail = if (carried != null) "Installed. Reboot when the run finishes." else "Installed.",
                             )
                         }
+                        // See rebootRequired on UiState. A service replaced under a
+                        // running system can leave the lens-controller HAL wedged:
+                        // every app weaves and tracks, the runtime and the SDK both
+                        // report 3D on, and the glass stays flat 2D until a reboot
+                        // power-cycles the HAL (android-bundle/INSTALL.md, "Reboot.
+                        // It is not optional"). Set here, on success only — a
+                        // service that did not change needs no reboot.
+                        if (carried != null) _state.update { it.copy(rebootRequired = true) }
                     }
 
                     is InstallOutcome.Failure -> {
                         failedCount++
+                        if (carried != null && c.packageName == EmbeddedServices.SERVICE_ORDER[0]) coreServiceFailed = true
                         setRow(c) { it.copy(status = RowStatus.FAILED, detail = failureText(c, outcome)) }
                         if (c.id == "runtime") {
                             stopRun(
@@ -338,6 +456,7 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                         if (failedCount > 0) append(", $failedCount not installed — see the rows above")
                         append(". ")
                         append(if (runtimePresent) "Opening the runtime once…" else "No runtime is installed.")
+                        if (s.rebootRequired) append(" Then REBOOT the tablet — the display services changed.")
                     },
                 )
             }

@@ -66,6 +66,33 @@
                     android:text="@string/btn_retry" />
             </LinearLayout>
 
+            <!-- Shown once an embedded display service has been installed (the
+                 with-services build only). A reboot is the one post-install step
+                 whose omission is invisible: everything reports 3D while the glass
+                 stays 2D. So it is a card at the top, not a line in a row. -->
+            <LinearLayout
+                android:id="@+id/rebootCard"
+                style="@style/Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/reboot_title"
+                    android:textColor="@color/dxr_error"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/reboot_body"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
             <LinearLayout
                 android:id="@+id/unknownSourcesCard"
                 style="@style/Card"
@@ -164,6 +191,18 @@
                 android:layout_marginTop="14dp"
                 android:text="@string/footer_launch_once"
                 android:textSize="12sp" />
+
+            <!-- The with-services build redistributes vendor binaries, and their
+                 licences require the notices to travel with them. The files are
+                 inside the APK as assets; this is where a person can read them. -->
+            <Button
+                android:id="@+id/licensesBtn"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/btn_licenses"
+                android:visibility="gone" />
 
             <TextView
                 android:layout_width="match_parent"
