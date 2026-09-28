@@ -193,6 +193,32 @@ object ApkInstaller {
         p.confirmIntent?.let { raise(it) }
     }
 
+    /**
+     * Put the installer back on top once Android has answered for a package.
+     *
+     * Found on the NP02J: updating a BUILT-IN app (the display services) ends on
+     * Android's own "App installed — DONE / OPEN" screen, and it stays on top of this
+     * app, one per package, until a person taps DONE. Meanwhile the run cannot raise
+     * the next confirmation from a foreground activity — which is how a confirmation
+     * gets dropped as a background start, the "no confirmation appeared" stall.
+     *
+     * The confirmation was started FROM this app's activity, so Android's screens sit in
+     * this app's task: re-launching the singleTask MainActivity clears them off the top
+     * (the same as DONE). Background-start rules may refuse this on some builds; then
+     * [appTasks] is tried, and if both are refused the caller waits for the owner and
+     * says "tap DONE" on the row — see [awaitForeground].
+     */
+    fun bringToFront(context: Context) {
+        if (Foreground.activity != null) return
+        val app = context.applicationContext
+        val self = Intent(app, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        if (runCatching { app.startActivity(self) }.isSuccess) return
+        runCatching {
+            app.getSystemService(android.app.ActivityManager::class.java)?.appTasks?.firstOrNull()?.moveToFront()
+        }
+    }
+
     fun hasPendingConfirmation(): Boolean {
         val p = active ?: return false
         return p.confirmIntent != null &&
