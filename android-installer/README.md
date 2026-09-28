@@ -234,11 +234,14 @@ or, for the one failure that stops everything, a card at the top with a Retry:
 | A pin with no Android asset | That row says so and names the tag. Nothing older is substituted. |
 | A pin naming a release that does not exist | That row says so and names the repo. |
 | GitHub API rate limit (60/h, anonymous) | That row says so and gives the minutes until reset. |
-| Download dies mid-way | "Download of X ended after N of M bytes." The partial file is deleted, not installed. |
+| Download dies mid-way | Resumed automatically with `Range:` from the bytes already on disk (6 attempts, backoff 2→30 s), with `Accept-Encoding: identity` and the release API's size as the length to hold the file to. Only after the last attempt: "Download of X ended after N of M bytes", the partial file deleted, and a **Retry download + install** button on the row. (NP02J: the browser once stopped at 1,686,822 of "-1" bytes — gzip had hidden the length — and the only way back was relaunching the app.) |
+| Android's "App installed — DONE / OPEN" screen stays on top (built-in-app updates) | The installer re-launches itself on top after every package and does not open the next session until it is really in front; if Android refuses that, the row says "tap DONE (not OPEN) to continue". Raising the next confirmation under that screen is how a confirmation goes missing. |
+| Any failed row, after a run | A per-row **Retry** runs just that component again. |
 | Out of space | Reported before the stream starts, from the session's declared size. |
 | Owner cancels a confirmation | "Cancelled at the Android confirmation dialog. Nothing was changed." |
 | The confirmation never appears | After 20 s: "Android's confirmation dialog has not appeared" + a RETRY button. After 5 min: the session is abandoned, the row says so, and the run continues. |
 | The tablet is locked | The run refuses to start, and the launch-once step waits for an unlock instead of launching into the keyguard. |
+| Relaunching the app | The browser opt-in is remembered, and the red reboot card stays until the tablet has **actually** rebooted (recorded against `Settings.Global.BOOT_COUNT`, boot time as a fallback). On the NP02J both reset on relaunch: "Nothing to install" with the browser missing, and no reboot reminder on an unrebooted tablet. |
 | The browser's version cannot be read | `installed: unknown (Chromium …)`, offered as an install. Never "newer", and never an uninstall. |
 | The runtime leg fails | The run stops there and says why — an app installed without a runtime only fails later, at startup. |
 
