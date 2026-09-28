@@ -177,6 +177,14 @@ class MainActivity : AppCompatActivity() {
             b.action.visibility = View.VISIBLE
             b.action.text = getString(R.string.btn_retry_confirm)
             b.action.setOnClickListener { vm.retryConfirmation() }
+        } else if (vm.canRetry(row)) {
+            // Per-row retry after a failure (a dropped download, a cancelled dialog).
+            // Before it existed, the only way back from a failed row was relaunching.
+            b.action.visibility = View.VISIBLE
+            b.action.text = getString(
+                if (row.component.embedded == null) R.string.btn_retry_download else R.string.btn_retry_install
+            )
+            b.action.setOnClickListener { vm.retryRow(row.component.id) }
         } else {
             b.action.visibility = View.GONE
             b.action.setOnClickListener(null)

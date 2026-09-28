@@ -12,6 +12,8 @@
     <string name="btn_allow_unknown_sources">Allow this app to install apps</string>
     <string name="btn_grant_overlay">Open the setting</string>
     <string name="btn_open_runtime">Open the runtime once</string>
+    <string name="btn_retry_download">Retry download + install</string>
+    <string name="btn_retry_install">Retry install</string>
     <string name="btn_retry_confirm">Retry — ask Android for the confirmation again</string>
 
     <string name="btn_licenses">Licences for the bundled display services</string>

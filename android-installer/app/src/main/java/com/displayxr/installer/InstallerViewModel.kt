@@ -57,6 +57,10 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
             rows = components.map { RowState(it) },
             hasEmbeddedServices = embedded != null,
             globalError = embeddedError,
+            // Both survive a relaunch — see Prefs and RebootTracker for what went wrong
+            // on the NP02J when they did not.
+            browserOptIn = Prefs.browserOptIn(app),
+            rebootRequired = RebootTracker.isPending(app),
         )
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -188,6 +192,7 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setBrowserOptIn(optIn: Boolean) {
+        if (optIn != _state.value.browserOptIn) Prefs.setBrowserOptIn(ctx, optIn)
         _state.update { it.copy(browserOptIn = optIn) }
         applyBrowserGate()
         if (_state.value.phase == Phase.READY) {
@@ -276,7 +281,35 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------------------------------------------------------- install
 
-    fun install() {
+    /**
+     * RETRY on a failed row, after a run or between runs. Found on the NP02J: a
+     * browser download that died left no way back except relaunching the app.
+     * Runs the same path as a full run, restricted to that one component.
+     */
+    fun retryRow(id: String) {
+        val row = _state.value.rows.firstOrNull { it.component.id == id } ?: return
+        if (!canRetry(row)) return
+        val carried = row.component.embedded
+        setRow(row.component) {
+            it.copy(
+                status = if (carried != null) servicePlannedStatus(it.installed, carried)
+                else plannedStatus(it.installed, it.pin ?: ""),
+                detail = "",
+                progressPercent = -1,
+            )
+        }
+        install(onlyId = id)
+    }
+
+    /** Whether a row offers RETRY: it failed, and there is something to fetch again. */
+    fun canRetry(row: RowState): Boolean {
+        val phase = _state.value.phase
+        return row.status == RowStatus.FAILED &&
+            (row.asset != null || row.component.embedded != null) &&
+            (phase == Phase.READY || phase == Phase.FINISHED)
+    }
+
+    fun install(onlyId: String? = null) {
         val phase = _state.value.phase
         if (phase == Phase.RUNNING || phase == Phase.RESOLVING) return
 
@@ -305,8 +338,10 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
             // installed over the old core: that update "changes nothing about 3D
             // prediction" while making the tablet look updated.
             var coreServiceFailed = false
+            var runtimeInstalledNow = false
 
             for (c in components) {
+                if (onlyId != null && c.id != onlyId) continue
                 if (c.embedded != null && c.packageName != EmbeddedServices.SERVICE_ORDER[0] && coreServiceFailed) {
                     val r = _state.value.rows.first { it.component.id == c.id }
                     if (r.status in PLANNED_STATUSES) {
@@ -355,7 +390,22 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                         setRow(c) {
                             it.copy(status = RowStatus.DOWNLOADING, progressPercent = 0, detail = asset!!.name)
                         }
-                        Net.download(asset!!.url, asset.name, apk) { got, total ->
+                        Net.download(
+                            url = asset!!.url,
+                            name = asset.name,
+                            dest = apk,
+                            // The release API's size is what the file must end up; it also
+                            // gives progress a denominator when the server omits one.
+                            expectedSize = asset.size,
+                            onRetry = { attempt, f, have ->
+                                setRow(c) {
+                                    it.copy(
+                                        detail = "${asset.name}\nConnection dropped at ${have / (1024 * 1024)} MB " +
+                                            "(${f.message?.substringBefore('.')}). Resuming — attempt ${attempt + 1}.",
+                                    )
+                                }
+                            },
+                        ) { got, total ->
                             val pct = if (total > 0) ((got * 100) / total).toInt() else -1
                             setRow(c) { it.copy(progressPercent = pct) }
                         }
@@ -412,6 +462,14 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 apk.delete()
 
+                // Serialise on the screen, not only on the session. On the NP02J a
+                // built-in-app update ends on Android's "App installed — DONE / OPEN"
+                // screen, which stays on top of this app; raising the next confirmation
+                // under it is how a confirmation goes missing. So get back on top, and
+                // do not open the next session until this app is really in front.
+                ApkInstaller.bringToFront(ctx)
+                awaitForeground(c)
+
                 when (outcome) {
                     is InstallOutcome.Success -> {
                         installedCount++
@@ -429,7 +487,11 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                         // power-cycles the HAL (android-bundle/INSTALL.md, "Reboot.
                         // It is not optional"). Set here, on success only — a
                         // service that did not change needs no reboot.
-                        if (carried != null) _state.update { it.copy(rebootRequired = true) }
+                        if (carried != null) {
+                            RebootTracker.markPending(ctx)
+                            _state.update { it.copy(rebootRequired = true) }
+                        }
+                        if (c.id == "runtime") runtimeInstalledNow = true
                     }
 
                     is InstallOutcome.Failure -> {
@@ -460,8 +522,35 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                     },
                 )
             }
-            if (runtimePresent) launchRuntimeOnceWhenUnlocked()
+            // A one-row retry only re-opens the runtime if that row WAS the runtime:
+            // otherwise retrying a demo would yank the screen to the runtime dashboard.
+            if (runtimePresent && (onlyId == null || runtimeInstalledNow)) launchRuntimeOnceWhenUnlocked()
         }
+    }
+
+    /**
+     * Wait until this app's activity is resumed again. Returns at once in the normal
+     * case; otherwise the row tells the owner exactly what to tap, because Android's
+     * "App installed" screen offers OPEN as well, and OPEN leaves this app behind.
+     * Deliberately unbounded: the run is paused on a visible, named action, not a
+     * spinner, and proceeding under that screen is the failure being avoided.
+     */
+    private suspend fun awaitForeground(c: Component) {
+        if (Foreground.activity != null) return
+        // Give the bring-to-front a moment before asking a person to do it.
+        repeat(6) {
+            delay(500)
+            if (Foreground.activity != null) return
+        }
+        val before = _state.value.rows.first { it.component.id == c.id }.detail
+        setRow(c) {
+            it.copy(
+                detail = "Android is showing its \"App installed\" screen on top of this app. " +
+                    "Tap DONE (not OPEN) to continue — the next package waits for it.",
+            )
+        }
+        while (Foreground.activity == null) delay(500)
+        setRow(c) { it.copy(detail = before) }
     }
 
     private fun failureText(c: Component, f: InstallOutcome.Failure): String = when {
