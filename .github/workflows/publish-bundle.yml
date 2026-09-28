@@ -258,8 +258,21 @@ jobs:
           path: _out/DisplayXRBundle-*-linux-amd64.tar.gz
           if-no-files-found: error
 
+  # The Android installer (issue #62): DisplayXR-Installer-<ver>.apk, the one
+  # tappable APK that downloads + installs the pinned Android stack. Built by the
+  # same workflow PRs run, so the published APK is the gated one, from this commit.
+  #
+  # STANDARD flavor only — it carries no vendor bytes. The with-services (cnsdk)
+  # flavor embeds the private vendor display-service APKs and must NEVER land on a
+  # public release; it lives only inside the tablet-bundle zip and as a CI artifact
+  # of build-android-bundle.yml. The release job below re-proves that from the
+  # bytes before attaching anything.
+  build-android-installer:
+    needs: assert-versions-in-sync
+    uses: ./.github/workflows/build-android-installer.yml
+
   release:
-    needs: [build-macos, build-windows, build-linux]
+    needs: [build-macos, build-windows, build-linux, build-android-installer]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -272,6 +285,26 @@ jobs:
       - name: List downloaded artifacts
         run: ls -lh _out/
 
+      # Belt and braces for the one rule this release must never break: the
+      # installer APK attached here is PUBLIC, so it must carry no vendor bytes.
+      # Judged from the APK itself, not from its name — a with-services build that
+      # lost its suffix would sail past a filename check. Exactly one installer APK,
+      # no assets/cnsdk/ tree, and no nested APK of any name inside it.
+      - name: The Android installer is the public flavor
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(_out/DisplayXR-Installer-*.apk)
+          [ "${#apks[@]}" -eq 1 ] || { echo "::error::expected exactly one DisplayXR-Installer-*.apk, found ${#apks[@]}: ${apks[*]:-none}"; exit 1; }
+          a=${apks[0]}
+          case "$a" in *cnsdk*) echo "::error::$a is the with-services build — it must never be attached to a public release"; exit 1 ;; esac
+          if unzip -Z1 "$a" | grep -E '^assets/cnsdk/|\.apk$'; then
+            echo "::error::$a embeds files the public installer must not carry — refusing to publish it"
+            exit 1
+          fi
+          ( cd _out && sha256sum -c "$(basename "$a").sha256" )
+          echo "OK: $(basename "$a") is the public flavor."
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
@@ -283,6 +316,8 @@ jobs:
             _out/DisplayXRBundle-*.pkg
             _out/DisplayXRBundle-*.exe
             _out/DisplayXRBundle-*-linux-amd64.tar.gz
+            _out/DisplayXR-Installer-*.apk
+            _out/DisplayXR-Installer-*.apk.sha256
           fail_on_unmatched_files: true
 
       # ---------------------------------------------------------------------
