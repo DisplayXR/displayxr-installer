@@ -33,8 +33,13 @@ jobs:
           # (...leiadisp@1.0-service): prove-3d.sh greps its logcat lines verbatim,
           # because it is the only layer that knows whether the glass really
           # switched to 3D, and a grep cannot be neutralized.
+          # `leia tablet` is the hardware family a tablet OWNER searches for: the
+          # install instructions for them (android-installer/README.md, the bundle
+          # release notes) must name the device they are holding. `leia_core_` is the
+          # CNSDK core's C API prefix, named where the docs say which symbols the
+          # factory core lacks.
           FORBIDDEN="le""ia"
-          ALLOW='cnsdk|leia_cnsdk|libdxrp050_leia_cnsdk|leiasdk|leiasr|displayxr-leia|leia-plugin|leiaplugin|leia_plugin|leia_tag|leia-sr|leia sr|leia hardware|leia display|leia dp|leia android dp|leia sdk|leia plug|leia panel|leia weave|leia face|leia viewer|leia-viewer|leia convention|leia lif|leia heif|leia image format|leiaschema|classic leia|leialoft|leiainc/|leia/sr|LEIA_EXE|LEIA_VER|LEIA_TAG|SecLeia|G_Leia|LeiaUnrealSDK|LeiaPlayerWin|libleiacore|leia_interlacer|headtrackingservice|leiadisp'
+          ALLOW='cnsdk|leia_cnsdk|libdxrp050_leia_cnsdk|leiasdk|leiasr|displayxr-leia|leia-plugin|leiaplugin|leia_plugin|leia_tag|leia-sr|leia sr|leia hardware|leia display|leia dp|leia android dp|leia sdk|leia plug|leia panel|leia weave|leia face|leia viewer|leia-viewer|leia convention|leia lif|leia heif|leia image format|leiaschema|classic leia|leialoft|leiainc/|leia/sr|LEIA_EXE|LEIA_VER|LEIA_TAG|SecLeia|G_Leia|LeiaUnrealSDK|LeiaPlayerWin|libleiacore|leia_interlacer|headtrackingservice|leiadisp|leia tablet|leia_core_'
           hits=$(grep -rniI \
                    --exclude-dir=.git --exclude-dir=.claude \
                    --exclude-dir=openxr --exclude-dir=displayxr-common \

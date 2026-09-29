@@ -11,6 +11,7 @@ Tracks issue [`DisplayXR/displayxr-runtime#284`](https://github.com/DisplayXR/di
 | macOS 13+ | [latest `.pkg`](https://github.com/DisplayXR/displayxr-installer/releases/latest) |
 | Windows 10/11 | [latest `.exe`](https://github.com/DisplayXR/displayxr-installer/releases/latest) |
 | Linux (Debian/Ubuntu amd64) | [latest `.tar.gz`](https://github.com/DisplayXR/displayxr-installer/releases/latest) — unpack, then `sudo ./install.sh` |
+| Android 3D tablet (Lume Pad 2, Nubia Pad 3D, Lume Phone) | [latest `DisplayXR-Installer-<ver>.apk`](https://github.com/DisplayXR/displayxr-installer/releases/latest) — step by step: [Install DisplayXR on a Leia tablet](android-installer/README.md#install-displayxr-on-a-leia-tablet-lume-pad-2--nubia-pad-3d--lume-phone) |
 
 ## One-time install warning (unsigned)
 
@@ -52,7 +53,10 @@ Demos are **not** included on Linux yet — they ship Windows `.exe` / macOS `.p
 Android has no NSIS equivalent — an App Bundle or a set of split APKs describes exactly one app —
 so the "one tappable artifact" job is done by an app. `DisplayXR-Installer-<ver>.apk` reads the same
 `versions.json` pin matrix, downloads each pinned component from its GitHub release, installs them
-in dependency order, and then performs the post-install steps that installing APKs does not do:
+in dependency order — on a 3D tablet, starting with the pinned vendor display services, which it
+downloads from `updates.displayxr.org` and verifies against the vendor certificate it carries (on the
+factory services DisplayXR runs but 3D does not work) — and then performs the post-install steps that
+installing APKs does not do:
 opening the runtime once (without which every OpenXR app dies at instance creation with
 `XR_ERROR_RUNTIME_UNAVAILABLE`), and deep-linking to the runtime's "Display over other apps" switch
 (without which see-through apps render on black while 3D keeps working).

@@ -1,0 +1,214 @@
+name: publish-cnsdk-services
+
+# Publishes the pinned vendor display services to
+#
+#     https://updates.displayxr.org/services/cnsdk/<tag>/
+#         manifest.json  device-service.apk  headtracking-service.apk  LICENSE*.txt  *.AUTHORS.txt
+#
+# which is where the public Android installer (android-installer/, DisplayServices.kt) fetches
+# them on a 3D tablet. Without them a tablet stays on its FACTORY services, on which DisplayXR
+# installs and runs but 3D does not work (content 2D, vertical parallax inverted, freezes).
+# Public hosting of these two APKs for that purpose was approved by the vendor (2026-09-29).
+#
+# How the bytes get there, and why this shape:
+#   - updates.displayxr.org is the GitHub Pages site of the PUBLIC repo DisplayXR/displayxr-browser
+#     (it also serves the browser's update feed, /feed.json). Its pages.yml deploys an ARTIFACT,
+#     so the ~60 MB of APKs never go into git — but every deploy replaces the whole site, so
+#     every deploy must be able to find them again.
+#   - They are therefore kept in a DRAFT release of that repo, `cnsdk-services-<tag>` — a byte
+#     store that is invisible to the public and never tagged. pages.yml copies every such draft
+#     into the site at /services/cnsdk/<tag>/, re-verifying each file against the manifest, on
+#     every deploy (feed promotions included).
+#   - This workflow owns the only step that needs the private vendor release: download it with
+#     LEIALOFT_GITHUB_TOKEN, lay it out with android-installer/scripts/make-services-manifest.sh
+#     (which REFUSES a wrong package, version, build string or signing certificate — the same
+#     certificate pin compiled into the app), upload it to the draft with a publish-bot token,
+#     ask pages.yml to redeploy, and then prove the host serves the exact bytes.
+#   - Nothing links to /services/ and Pages has no directory listing, so the host is public
+#     and stable without being a "download the vendor SDK here" page.
+#
+# The host is NOT a trust boundary: the app checks size + sha256 against the manifest and the
+# signing certificate against the pin it carries, and Android itself refuses an update to a
+# built-in app that is not signed with that app's key.
+#
+# Triggers: workflow_dispatch (optionally with a tag), and any push to main that touches
+# versions.json — the runtime's versions-bump mirror is such a push. A run whose tag the host
+# already serves exits in seconds, so the push trigger costs nothing when cnsdk_services did
+# not move.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "CNSDK release tag to publish (default: versions.json cnsdk_services)"
+        type: string
+        default: ""
+      force:
+        description: "Re-upload and redeploy even if the host already serves this tag"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: [versions.json]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-cnsdk-services
+  cancel-in-progress: false
+
+env:
+  HOST: https://updates.displayxr.org
+  STORE_REPO: DisplayXR/displayxr-browser
+  VENDOR_REPO: LeiaInc/CNSDK
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Which release, and is it already served
+        id: which
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          [ -n "$TAG" ] || TAG=$(jq -r '.cnsdk_services // ""' versions.json)
+          [ -n "$TAG" ] || { echo "::error::versions.json has no cnsdk_services pin and no tag was given"; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$TAG' is not vX.Y.Z"; exit 1; }
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "BASE=$HOST/services/cnsdk/$TAG" >> "$GITHUB_ENV"
+          echo "cnsdk_services: $TAG"
+          if [ "${FORCE:-false}" != "true" ] &&
+             curl -fsS --max-time 30 "$HOST/services/cnsdk/$TAG/manifest.json" -o live.json &&
+             [ "$(jq -r .cnsdk_tag live.json)" = "$TAG" ]; then
+            echo "The host already serves CNSDK $TAG — nothing to do (dispatch with force=true to republish)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            { echo "### CNSDK $TAG already served"; echo; echo "$HOST/services/cnsdk/$TAG/manifest.json"; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download the display services (private vendor release)
+        if: steps.which.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.LEIALOFT_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::secret LEIALOFT_GITHUB_TOKEN is not set — the display-service APKs live in a private repo"
+            exit 1
+          fi
+          mkdir -p _in/apks _in/licenses
+          # Capital T in headTracking is load-bearing: asset-name matching is case-sensitive.
+          gh release download "$TAG" -R "$VENDOR_REPO" -D _in/apks --clobber \
+             -p 'device-service-release-*.apk' \
+             -p 'headTracking-service-release-*.apk'
+          # The licence notices ship inside the vendor's release zip (same extraction as
+          # build-android-bundle.yml): libzmq's modified LGPLv3, Eigen's MPL-2.0 and the
+          # Apache-2.0 components all require them to travel with the binaries.
+          lic=$(mktemp -d)
+          gh release download "$TAG" -R "$VENDOR_REPO" -D "$lic" --clobber -p 'cnsdk-android-[0-9]*.zip'
+          z=$(ls "$lic"/cnsdk-android-[0-9]*.zip | head -1)
+          unzip -q -o -j "$z" '*/LICENSE-3RD-PARTY.txt' '*/LICENSE.txt' \
+                              '*/ZMQ.AUTHORS.txt' '*/SIMDJSON.AUTHORS.txt' -d _in/licenses || true
+          rm -rf "$lic"
+          ls -l _in/apks _in/licenses
+
+      - name: Lay out + verify (package, version, build, signing certificate, licences)
+        if: steps.which.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          android-installer/scripts/make-services-manifest.sh \
+            --tag "$TAG" --apks _in/apks --licenses _in/licenses --out _svc
+          cat _svc/manifest.json
+
+      - name: Mint a publish-bot token for the store repo
+        if: steps.which.outputs.skip != 'true'
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.DISPLAYXR_APP_ID }}
+          private-key: ${{ secrets.DISPLAYXR_APP_PRIVATE_KEY }}
+          owner: DisplayXR
+          repositories: displayxr-browser
+
+      - name: Upload to the draft byte store (cnsdk-services-<tag>)
+        if: steps.which.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          R="cnsdk-services-$TAG"
+          NOTES=$(printf '%s\n' \
+            "Byte store for $HOST/services/cnsdk/$TAG/ — the vendor display services the DisplayXR" \
+            "Android installer installs on 3D tablets. displayxr-browser's pages.yml copies every" \
+            "cnsdk-services-* DRAFT into the Pages site on each deploy." \
+            "" \
+            "KEEP THIS A DRAFT. Publishing it would list vendor binaries on the Releases page and" \
+            "create a git tag; deleting it removes the files from the site at the next deploy." \
+            "" \
+            "Written by DisplayXR/displayxr-installer publish-cnsdk-services.yml, run" \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")
+          files=(_svc/*)
+          state=$(gh release view "$R" -R "$STORE_REPO" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+          case "$state" in
+            missing)
+              gh release create "$R" -R "$STORE_REPO" --draft \
+                --title "$R (byte store for updates.displayxr.org — keep as draft)" \
+                --notes "$NOTES" "${files[@]}" ;;
+            true)
+              gh release upload "$R" -R "$STORE_REPO" --clobber "${files[@]}"
+              gh release edit "$R" -R "$STORE_REPO" --notes "$NOTES" >/dev/null ;;
+            *)
+              echo "::error::$STORE_REPO release $R exists and is NOT a draft — it is publicly listed. Convert it back to a draft (or delete it) before republishing."
+              exit 1 ;;
+          esac
+          gh release view "$R" -R "$STORE_REPO" --json isDraft,assets --jq '{isDraft, assets: [.assets[] | "\(.name) \(.size)"]}'
+
+      - name: Ask the site to redeploy
+        if: steps.which.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$STORE_REPO/dispatches" -f event_type=cnsdk-services -f "client_payload[tag]=$TAG"
+          echo "dispatched cnsdk-services to $STORE_REPO"
+
+      # Green only when the host serves exactly what was laid out: the manifest byte for byte,
+      # and every file it lists at the size and sha256 it records.
+      - name: Verify the host serves the exact bytes
+        if: steps.which.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 1200 ))
+          until curl -fsS --max-time 30 "$BASE/manifest.json" -o served.json 2>/dev/null && cmp -s served.json _svc/manifest.json; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::after 20 min $BASE/manifest.json is not the manifest this run published. Check the latest pages run on $STORE_REPO — its pages.yml must be the version that assembles /services/ from the cnsdk-services-* drafts."
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "manifest served."
+          fail=0
+          while IFS=$'\t' read -r f want size; do
+            curl -fsS --max-time 300 "$BASE/$f" -o "served-$f"
+            got=$(sha256sum "served-$f" | cut -d' ' -f1)
+            n=$(wc -c < "served-$f" | tr -d ' ')
+            if [ "$got" = "$want" ] && [ "$n" = "$size" ]; then
+              echo "  OK  $BASE/$f  $n bytes  $got"
+            else
+              echo "::error::$BASE/$f is $n bytes / $got, expected $size / $want"; fail=1
+            fi
+          done < <(jq -r '(.services[], .licenses[]) | [.file, .sha256, (.size|tostring)] | @tsv' _svc/manifest.json)
+          [ "$fail" -eq 0 ] || exit 1
+          {
+            echo "### Published CNSDK $TAG display services"
+            echo
+            echo "- manifest: $BASE/manifest.json"
+            jq -r '.services[] | "- \(.package) \(.versionName) (\(.versionCode)) — \(.file), \(.size) bytes, sha256 `\(.sha256)`"' _svc/manifest.json
+          } >> "$GITHUB_STEP_SUMMARY"

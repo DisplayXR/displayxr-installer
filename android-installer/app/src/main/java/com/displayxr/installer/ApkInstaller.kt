@@ -239,6 +239,47 @@ object ApkInstaller {
         context.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)?.packageName
 
     /**
+     * Package name, versionCode and the SHA-256 of the CURRENT signing certificate(s)
+     * of a downloaded archive — the inputs of [DisplayServices.archiveProblem].
+     *
+     * Current, not historical: with a single signer, `signingCertificateHistory` lists
+     * the rotation lineage oldest-first and its LAST entry is the key the APK is signed
+     * with now; with several signers, `apkContentsSigners` is the set. Anything Android
+     * cannot read comes back empty, and the caller refuses the archive on that.
+     */
+    fun archiveIdentity(context: Context, apk: File): Triple<String?, Long?, List<String>> {
+        val info = try {
+            context.packageManager.getPackageArchiveInfo(
+                apk.absolutePath,
+                PackageManager.GET_SIGNING_CERTIFICATES,
+            )
+        } catch (t: Throwable) {
+            null
+        } ?: return Triple(null, null, emptyList())
+        val si = info.signingInfo
+        val sigs = when {
+            si == null -> emptyArray()
+            si.hasMultipleSigners() -> si.apkContentsSigners ?: emptyArray()
+            else -> si.signingCertificateHistory?.takeLast(1)?.toTypedArray() ?: emptyArray()
+        }
+        val md = { b: ByteArray -> java.security.MessageDigest.getInstance("SHA-256").digest(b) }
+        val digests = sigs.map { s -> md(s.toByteArray()).joinToString("") { "%02x".format(it) } }
+        return Triple(info.packageName, info.longVersionCode, digests)
+    }
+
+    /**
+     * Whether the vendor device-service is present as a SYSTEM app (shipped in the OEM
+     * image; still FLAG_SYSTEM after an update), or null when it is not installed.
+     * Feeds [DisplayServices.isTargetDevice].
+     */
+    fun deviceServiceIsSystem(context: Context): Boolean? = try {
+        val ai = context.packageManager.getApplicationInfo(DisplayServices.DEVICE_SERVICE, 0)
+        (ai.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+    } catch (e: PackageManager.NameNotFoundException) {
+        null
+    }
+
+    /**
      * What is installed for [component], and whether its version can be compared.
      *
      * For everything but the browser, `versionName` IS the DisplayXR release

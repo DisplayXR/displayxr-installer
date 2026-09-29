@@ -16,7 +16,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.displayxr.installer.databinding.ActivityMainBinding
 import com.displayxr.installer.databinding.RowComponentBinding
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
@@ -33,6 +35,7 @@ class MainActivity : AppCompatActivity() {
         Foreground.appContext = applicationContext
 
         ui.errorRetry.setOnClickListener { vm.refresh() }
+        ui.servicesRetry.setOnClickListener { vm.refresh() }
         ui.unknownSourcesBtn.setOnClickListener { openUnknownSourcesSettings() }
         ui.overlayBtn.setOnClickListener { openRuntimeOverlaySettings() }
         ui.runtimeLaunchBtn.setOnClickListener { vm.launchRuntimeOnce() }
@@ -91,7 +94,13 @@ class MainActivity : AppCompatActivity() {
         ui.errorCard.visibility = if (s.globalError == null) View.GONE else View.VISIBLE
         ui.errorText.text = s.globalError.orEmpty()
         ui.rebootCard.visibility = if (s.rebootRequired) View.VISIBLE else View.GONE
-        ui.licensesBtn.visibility = if (s.hasEmbeddedServices) View.VISIBLE else View.GONE
+        ui.licensesBtn.visibility = if (s.serviceLicenses.isNotEmpty()) View.VISIBLE else View.GONE
+
+        // The services card: DisplayXR is (or will be) installed, but on display services
+        // older than the pin 3D does not work correctly. Never allowed to be missed.
+        ui.servicesCard.visibility = if (s.servicesWarning == null) View.GONE else View.VISIBLE
+        ui.servicesText.text = s.servicesWarning.orEmpty()
+        ui.servicesRetry.isEnabled = s.phase != Phase.RUNNING && s.phase != Phase.RESOLVING
 
         for (row in s.rows) renderRow(row)
 
@@ -145,7 +154,7 @@ class MainActivity : AppCompatActivity() {
             // compared: Installed.label() prints "unknown (Chromium 154.0.…)".
             append("   installed ").append(row.installed.label())
             row.asset?.let { append("\n").append(it.name) }
-            row.component.embedded?.let { append("\n").append(it.fileName).append("  (inside this installer)") }
+            row.component.service?.let { append("\n").append(it.fileName).append("  (").append(DisplayServices.HOST.removePrefix("https://")).append(")") }
         }
 
         val (label, color) = statusLabel(row)
@@ -181,9 +190,7 @@ class MainActivity : AppCompatActivity() {
             // Per-row retry after a failure (a dropped download, a cancelled dialog).
             // Before it existed, the only way back from a failed row was relaunching.
             b.action.visibility = View.VISIBLE
-            b.action.text = getString(
-                if (row.component.embedded == null) R.string.btn_retry_download else R.string.btn_retry_install
-            )
+            b.action.text = getString(R.string.btn_retry_download)
             b.action.setOnClickListener { vm.retryRow(row.component.id) }
         } else {
             b.action.visibility = View.GONE
@@ -202,8 +209,8 @@ class MainActivity : AppCompatActivity() {
         RowStatus.UPDATE_UNVERIFIABLE -> "Will install the pinned build" to R.color.dxr_accent
         RowStatus.UP_TO_DATE -> "Up to date" to R.color.dxr_ok
         RowStatus.NEWER_INSTALLED ->
-            (if (row.component.embedded != null)
-                "Installed build is newer than the one inside this installer. Android refuses a " +
+            (if (row.component.service != null)
+                "Installed build is newer than the pinned display services. Android refuses a " +
                     "downgrade, so this is skipped."
             else
                 "Installed build is newer than the pin. Android refuses a downgrade, so this is " +
@@ -211,7 +218,7 @@ class MainActivity : AppCompatActivity() {
         RowStatus.BLOCKED -> "Refused" to R.color.dxr_error
         RowStatus.SKIPPED -> "Not selected" to R.color.dxr_muted
         RowStatus.DOWNLOADING ->
-            (if (row.component.embedded != null) "Unpacking…" else "Downloading…") to R.color.dxr_accent
+            "Downloading…" to R.color.dxr_accent
         RowStatus.INSTALLING -> "Installing — confirm on screen" to R.color.dxr_accent
         RowStatus.CONFIRM_STALLED -> "Waiting — no confirmation appeared" to R.color.dxr_warn
         RowStatus.DONE -> "Installed" to R.color.dxr_ok
@@ -233,18 +240,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Pick a licence file, then show it. Plain dialogs: nothing here needs more. */
+    /**
+     * Pick a licence file, then show it. The display services are redistributed vendor
+     * binaries (libzmq under a modified LGPLv3, Eigen MPL-2.0, Apache-2.0 components), and
+     * their notices are published next to them on the services host; this reads them from
+     * there. Plain dialogs: nothing here needs more.
+     */
     private fun showLicenses() {
-        val names = vm.embeddedLicenses()
-        if (names.isEmpty()) return
+        val files = vm.state.value.serviceLicenses
+        if (files.isEmpty()) return
         AlertDialog.Builder(this)
             .setTitle(R.string.btn_licenses)
-            .setItems(names.toTypedArray()) { _, i ->
-                AlertDialog.Builder(this)
-                    .setTitle(names[i])
-                    .setMessage(vm.readLicense(names[i]))
-                    .setPositiveButton(android.R.string.ok, null)
-                    .show()
+            .setItems(files.map { it.name }.toTypedArray()) { _, i ->
+                lifecycleScope.launch {
+                    val text = withContext(Dispatchers.IO) { vm.readLicense(files[i]) }
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle(files[i].name)
+                        .setMessage(text)
+                        .setPositiveButton(android.R.string.ok, null)
+                        .show()
+                }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()

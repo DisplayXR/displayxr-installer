@@ -21,42 +21,26 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
     private val ctx get() = getApplication<Application>()
 
     /**
-     * The display services this build carries, if any (the `cnsdk` flavor).
-     *
-     * A build that is SUPPOSED to carry them and does not — or whose index is
-     * damaged — is reported on screen and installs no services at all, rather
-     * than quietly behaving like the standard installer: the owner of a
-     * with-services build has been told it updates the services, and a run that
-     * silently did not is exactly the "looks done, glass stays 2D" outcome.
+     * Whether this is a 3D tablet whose OEM image ships the vendor display services
+     * (device-service installed as a SYSTEM app). Decided once, locally, before any
+     * network: on anything else the service rows are never shown and nothing about
+     * the services is fetched or installed.
      */
-    private val embedded: EmbeddedBundle?
-    private val embeddedError: String?
+    private val targetDevice: Boolean =
+        DisplayServices.isTargetDevice(ApkInstaller.deviceServiceIsSystem(app))
 
-    init {
-        var bundle: EmbeddedBundle? = null
-        var err: String? = null
-        try {
-            bundle = EmbeddedServices.load(app)
-            if (bundle == null && BuildConfig.EMBEDS_CNSDK) {
-                err = "This is the with-services build, but it carries no display services. " +
-                    "The build is defective; the services will NOT be installed by this run."
-            }
-        } catch (e: Exception) {
-            err = "The display services inside this installer could not be read (${e.message}). " +
-                "They will NOT be installed by this run."
-        }
-        embedded = bundle
-        embeddedError = err
-    }
+    /** versions.json `cnsdk_services`, once read. */
+    @Volatile
+    private var servicesPin: String? = null
 
-    /** Everything this build installs, in order: embedded services first. */
-    private val components: List<Component> = Catalog.components(embedded)
+    /** The host's manifest for [servicesPin], or null when it could not be read. */
+    @Volatile
+    private var manifest: ServiceManifest? = null
 
     private val _state = MutableStateFlow(
         UiState(
-            rows = components.map { RowState(it) },
-            hasEmbeddedServices = embedded != null,
-            globalError = embeddedError,
+            rows = Catalog.components(targetDevice).map { RowState(it) },
+            targetDevice = targetDevice,
             // Both survive a relaunch — see Prefs and RebootTracker for what went wrong
             // on the NP02J when they did not.
             browserOptIn = Prefs.browserOptIn(app),
@@ -65,12 +49,9 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    /** Licence files shipped with the embedded services (empty in the standard build). */
-    fun embeddedLicenses(): List<String> = embedded?.licenses.orEmpty()
-
-    fun readLicense(name: String): String =
-        runCatching { EmbeddedServices.readLicense(ctx, name) }
-            .getOrElse { "Could not read $name: ${it.message}" }
+    /** Licence notices published beside the service APKs. Blocking: call off the main thread. */
+    fun readLicense(l: LicenseFile): String =
+        runCatching { Net.getText(l.url) }.getOrElse { "Could not read ${l.name}: ${it.message}" }
 
     // ---------------------------------------------------------------- resolve
 
@@ -79,7 +60,8 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { s ->
             s.copy(
                 phase = Phase.RESOLVING,
-                globalError = embeddedError,
+                globalError = null,
+                servicesWarning = null,
                 summary = "Reading the pinned versions…",
                 rows = s.rows.map { it.copy(status = RowStatus.RESOLVING, detail = "", progressPercent = -1) },
             )
@@ -96,40 +78,51 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                     s.copy(
                         phase = Phase.IDLE,
                         summary = "",
-                        globalError = listOfNotNull(
-                            "Could not read the pinned versions.\n\n${e.message}",
-                            embeddedError,
-                        ).joinToString("\n\n"),
+                        globalError = "Could not read the pinned versions.\n\n${e.message}",
                         rows = s.rows.map { it.copy(status = RowStatus.PENDING) },
                     )
                 }
                 return@launch
             }
 
+            val sPin = pins["cnsdk_services"]?.takeIf { it.isNotBlank() }
+            servicesPin = sPin
+            manifest = null
+            var manifestError: String? = null
+            if (targetDevice) {
+                if (sPin == null) {
+                    manifestError = "versions.json has no \"cnsdk_services\" pin, so there is no " +
+                        "display-services release to fetch"
+                } else {
+                    val url = DisplayServices.manifestUrl(sPin)
+                    try {
+                        manifest = DisplayServices.parseManifest(Net.getText(url), url, sPin)
+                    } catch (e: IOException) {
+                        manifestError = e.message ?: "could not read $url"
+                    }
+                }
+            }
+
             _state.update {
                 it.copy(
+                    serviceLicenses = manifest?.licenses.orEmpty(),
                     pinSource = buildString {
                         append("pins: ${Catalog.PINS_REPO}@${Catalog.PINS_REF}   runtime ${pins["runtime"]}")
-                        embedded?.let { e -> append("\ndisplay services: CNSDK ${e.tag}, carried inside this installer") }
+                        if (targetDevice) {
+                            append("\ndisplay services: CNSDK ${sPin ?: "(not pinned)"}")
+                            manifest?.let { m -> append(" (${m.build}) from ${DisplayServices.HOST}") }
+                        }
                     }
                 )
             }
 
-            for (c in components) {
+            for (c in _state.value.rows.map { it.component }) {
                 val installed = ApkInstaller.installed(ctx, c)
 
-                // An embedded service has no release to resolve: the bytes are in
-                // this APK, so "the pin" is the build that is actually carried.
-                val apk = c.embedded
-                if (apk != null) {
-                    setRow(c) {
-                        it.copy(
-                            pin = apk.versionName,
-                            installed = installed,
-                            status = servicePlannedStatus(installed, apk),
-                            detail = serviceNote(pins["cnsdk_services"]),
-                        )
-                    }
+                // A display service has no GitHub release to resolve: its file and
+                // digests come from the services manifest, fetched above.
+                if (Catalog.isService(c)) {
+                    resolveServiceRow(c, installed, sPin, manifestError)
                     continue
                 }
 
@@ -161,27 +154,72 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
 
             applyBrowserGate()
             _state.update { it.copy(phase = Phase.READY, summary = plannedSummary()) }
+            // Before a run the card is only raised when this run CANNOT fix it (the
+            // manifest is unreachable, or a service row is refused): a plain "Update
+            // available" row is already the message, and a red card on top of it would
+            // read as a failure before anything has been tried.
+            val rows = _state.value.rows.filter { Catalog.isService(it.component) }
+            val fixable = rows.all { it.status in PLANNED_STATUSES || it.status == RowStatus.UP_TO_DATE }
+            _state.update { it.copy(servicesWarning = if (fixable) null else servicesWarning()) }
         }
+    }
+
+    /**
+     * One display-service row, from the manifest when there is one.
+     *
+     * Without the manifest the row does not disappear and does not pretend: if the
+     * installed build already matches the pin it is up to date (nothing to fetch);
+     * otherwise it says an update is NEEDED and could not be downloaded, and why.
+     */
+    private fun resolveServiceRow(c: Component, installed: Installed, pin: String?, manifestError: String?) {
+        val apk = manifest?.services?.firstOrNull { it.packageName == c.packageName }
+        val comp = Catalog.serviceComponent(c.packageName, apk)
+        if (apk != null) {
+            setRow(c) {
+                it.copy(
+                    component = comp,
+                    pin = apk.versionName,
+                    installed = installed,
+                    status = servicePlannedStatus(installed, apk),
+                    detail = "",
+                )
+            }
+            return
+        }
+        val current = pin != null && installed is Installed.Exact && Versions.same(installed.version, pin)
+        setRow(c) {
+            it.copy(
+                component = comp,
+                pin = pin?.let(Versions::strip),
+                installed = installed,
+                status = if (current) RowStatus.UP_TO_DATE else RowStatus.UNRESOLVED,
+                detail = if (current) "" else
+                    "Display services update needed — could not download it " +
+                        "(${manifestError ?: "no manifest"}). Check the tablet's connection, then " +
+                        "tap Check again.",
+            )
+        }
+    }
+
+    /**
+     * The "3D will not work correctly" sentence, or null when the services on this
+     * tablet are at (or past) the pin. Reads the INSTALLED versions fresh, so after a
+     * run it reflects what actually happened, not what was planned.
+     */
+    private fun servicesWarning(): String? {
+        if (!targetDevice) return null
+        val pin = servicesPin ?: return null
+        val installed = DisplayServices.SERVICE_ORDER.associateWith {
+            ApkInstaller.installed(ctx, Catalog.serviceComponent(it, null))
+        }
+        val stale = DisplayServices.staleServices(installed, pin, manifest)
+        return if (stale.isEmpty()) null else DisplayServices.staleWarning(stale, installed, pin)
     }
 
     /**
      * The one row note that has to survive: when a component's installed version
      * cannot be read, say so and say what the number on screen actually is.
      */
-    /**
-     * The one thing worth saying about an embedded service before the run: when the
-     * published pin has moved past what this installer carries. It still installs
-     * what it carries — a newer vendor build cannot be fetched from here, and the
-     * carried one is a matched, gated pair — but the owner should know a newer
-     * with-services installer exists.
-     */
-    private fun serviceNote(publishedPin: String?): String {
-        val tag = embedded?.tag ?: return ""
-        if (publishedPin.isNullOrBlank() || Versions.same(publishedPin, tag)) return ""
-        return "versions.json now pins CNSDK $publishedPin; this installer carries $tag. It installs " +
-            "what it carries — get a newer with-services installer for $publishedPin."
-    }
-
     private fun detailFor(c: Component, installed: Installed): String = when (installed) {
         is Installed.Opaque ->
             "The installed build's DisplayXR version is not readable — ${installed.shown} is the " +
@@ -289,10 +327,10 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
     fun retryRow(id: String) {
         val row = _state.value.rows.firstOrNull { it.component.id == id } ?: return
         if (!canRetry(row)) return
-        val carried = row.component.embedded
+        val svc = row.component.service
         setRow(row.component) {
             it.copy(
-                status = if (carried != null) servicePlannedStatus(it.installed, carried)
+                status = if (svc != null) servicePlannedStatus(it.installed, svc)
                 else plannedStatus(it.installed, it.pin ?: ""),
                 detail = "",
                 progressPercent = -1,
@@ -305,7 +343,7 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
     fun canRetry(row: RowState): Boolean {
         val phase = _state.value.phase
         return row.status == RowStatus.FAILED &&
-            (row.asset != null || row.component.embedded != null) &&
+            (row.asset != null || row.component.service != null) &&
             (phase == Phase.READY || phase == Phase.FINISHED)
     }
 
@@ -328,7 +366,7 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        _state.update { it.copy(phase = Phase.RUNNING, globalError = embeddedError, summary = "Working…") }
+        _state.update { it.copy(phase = Phase.RUNNING, globalError = null, summary = "Working…") }
 
         viewModelScope.launch(Dispatchers.IO) {
             var installedCount = 0
@@ -340,9 +378,9 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
             var coreServiceFailed = false
             var runtimeInstalledNow = false
 
-            for (c in components) {
+            for (c in _state.value.rows.map { it.component }) {
                 if (onlyId != null && c.id != onlyId) continue
-                if (c.embedded != null && c.packageName != EmbeddedServices.SERVICE_ORDER[0] && coreServiceFailed) {
+                if (Catalog.isService(c) && c.packageName != DisplayServices.DEVICE_SERVICE && coreServiceFailed) {
                     val r = _state.value.rows.first { it.component.id == c.id }
                     if (r.status in PLANNED_STATUSES) {
                         setRow(c) {
@@ -376,41 +414,56 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
 
                 val row = _state.value.rows.first { it.component.id == c.id }
                 val asset = row.asset
-                val carried = c.embedded
-                if ((asset == null && carried == null) || row.status !in PLANNED_STATUSES) continue
+                val svc = c.service
+                if ((asset == null && svc == null) || row.status !in PLANNED_STATUSES) continue
 
-                val apk = File(ctx.cacheDir, carried?.fileName ?: asset!!.name)
+                val fileName = svc?.fileName ?: asset!!.name
+                val url = svc?.url ?: asset!!.url
+                val expected = svc?.size ?: asset!!.size
+                val apk = File(ctx.cacheDir, fileName)
                 apk.delete()
 
                 try {
-                    if (carried != null) {
-                        setRow(c) { it.copy(status = RowStatus.DOWNLOADING, progressPercent = -1, detail = "Unpacking ${carried.fileName}") }
-                        EmbeddedServices.extract(ctx, carried, apk)
-                    } else {
+                    setRow(c) { it.copy(status = RowStatus.DOWNLOADING, progressPercent = 0, detail = fileName) }
+                    Net.download(
+                        url = url,
+                        name = fileName,
+                        dest = apk,
+                        // The release API's (or services manifest's) size is what the file must
+                        // end up; it also gives progress a denominator when the server omits one.
+                        expectedSize = expected,
+                        onRetry = { attempt, f, have ->
+                            setRow(c) {
+                                it.copy(
+                                    detail = "$fileName\nConnection dropped at ${have / (1024 * 1024)} MB " +
+                                        "(${f.message?.substringBefore('.')}). Resuming — attempt ${attempt + 1}.",
+                                )
+                            }
+                        },
+                    ) { got, total ->
+                        val pct = if (total > 0) ((got * 100) / total).toInt() else -1
+                        setRow(c) { it.copy(progressPercent = pct) }
+                    }
+
+                    // A display service is an update to a BUILT-IN app, from a host that is
+                    // not a trust boundary: the bytes must be the manifest's (size + sha256)
+                    // and the archive must be the pinned package, versionCode and vendor key.
+                    if (svc != null) {
                         setRow(c) {
-                            it.copy(status = RowStatus.DOWNLOADING, progressPercent = 0, detail = asset!!.name)
+                            it.copy(
+                                progressPercent = -1,
+                                detail = "Checking $fileName — size, sha256 and signing certificate…",
+                            )
                         }
-                        Net.download(
-                            url = asset!!.url,
-                            name = asset.name,
-                            dest = apk,
-                            // The release API's size is what the file must end up; it also
-                            // gives progress a denominator when the server omits one.
-                            expectedSize = asset.size,
-                            onRetry = { attempt, f, have ->
-                                setRow(c) {
-                                    it.copy(
-                                        detail = "${asset.name}\nConnection dropped at ${have / (1024 * 1024)} MB " +
-                                            "(${f.message?.substringBefore('.')}). Resuming — attempt ${attempt + 1}.",
-                                    )
-                                }
-                            },
-                        ) { got, total ->
-                            val pct = if (total > 0) ((got * 100) / total).toInt() else -1
-                            setRow(c) { it.copy(progressPercent = pct) }
+                        DisplayServices.verifyFile(apk, svc)
+                        val (archPkg, archCode, signers) = ApkInstaller.archiveIdentity(ctx, apk)
+                        DisplayServices.archiveProblem(svc, archPkg, archCode, signers)?.let { why ->
+                            apk.delete()
+                            throw ServiceVerificationException(why)
                         }
                     }
                 } catch (e: IOException) {
+                    apk.delete()
                     setRow(c) {
                         it.copy(
                             status = RowStatus.FAILED,
@@ -419,7 +472,7 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     }
                     failedCount++
-                    if (carried != null && c.packageName == EmbeddedServices.SERVICE_ORDER[0]) coreServiceFailed = true
+                    if (svc != null && c.packageName == DisplayServices.DEVICE_SERVICE) coreServiceFailed = true
                     if (c.id == "runtime") {
                         stopRun(
                             "The runtime could not be downloaded, so nothing after it was " +
@@ -477,7 +530,7 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                             it.copy(
                                 status = RowStatus.DONE,
                                 installed = ApkInstaller.installed(ctx, c),
-                                detail = if (carried != null) "Installed. Reboot when the run finishes." else "Installed.",
+                                detail = if (svc != null) "Installed. Reboot when the run finishes." else "Installed.",
                             )
                         }
                         // See rebootRequired on UiState. A service replaced under a
@@ -487,7 +540,7 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                         // power-cycles the HAL (android-bundle/INSTALL.md, "Reboot.
                         // It is not optional"). Set here, on success only — a
                         // service that did not change needs no reboot.
-                        if (carried != null) {
+                        if (svc != null) {
                             RebootTracker.markPending(ctx)
                             _state.update { it.copy(rebootRequired = true) }
                         }
@@ -496,7 +549,7 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
 
                     is InstallOutcome.Failure -> {
                         failedCount++
-                        if (carried != null && c.packageName == EmbeddedServices.SERVICE_ORDER[0]) coreServiceFailed = true
+                        if (svc != null && c.packageName == DisplayServices.DEVICE_SERVICE) coreServiceFailed = true
                         setRow(c) { it.copy(status = RowStatus.FAILED, detail = failureText(c, outcome)) }
                         if (c.id == "runtime") {
                             stopRun(
@@ -510,13 +563,20 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             val runtimePresent = ApkInstaller.installed(ctx, Catalog.runtime) != Installed.Absent
+            // Read back from the device, not from this run's bookkeeping: a run that
+            // installed everything else but left a factory core must not read as done.
+            val warning = servicesWarning()
             _state.update { s ->
                 s.copy(
                     phase = Phase.FINISHED,
+                    servicesWarning = warning,
                     summary = buildString {
                         append("$installedCount installed")
                         if (failedCount > 0) append(", $failedCount not installed — see the rows above")
                         append(". ")
+                        if (warning != null) {
+                            append("NOT READY: 3D will not work correctly until the display services are updated (red card above). ")
+                        }
                         append(if (runtimePresent) "Opening the runtime once…" else "No runtime is installed.")
                         if (s.rebootRequired) append(" Then REBOOT the tablet — the display services changed.")
                     },

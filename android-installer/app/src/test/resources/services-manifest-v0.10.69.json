@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "kind": "displayxr-display-services",
+  "cnsdk_tag": "v0.10.69",
+  "cnsdk_build": "0.10.69+193.8291a2e",
+  "note": "Vendor display services for 3D tablets, installed by the DisplayXR Android installer. Paths are relative to this file. Install in the order listed.",
+  "services": [
+    {
+      "package": "com.leialoft.display.config",
+      "file": "device-service.apk",
+      "source_file": "device-service-release-0.10.69+193.8291a2e.apk",
+      "versionName": "0.10.69",
+      "versionCode": 290010069,
+      "sha256": "0da2c8fca7a263af8228bc8a168e9335959cfe4bbeac8a6bd3440dcd52d29f35",
+      "size": 13888346,
+      "signer_sha256": "dbc2792f775902a74302d500ab00c6224a4aeb89adb7d5dfdd4c3eeba763811c"
+    },
+    {
+      "package": "com.leia.headtrackingservice",
+      "file": "headtracking-service.apk",
+      "source_file": "headTracking-service-release-0.10.69+193.8291a2e.apk",
+      "versionName": "0.10.69",
+      "versionCode": 300010069,
+      "sha256": "44d0e7ae554feda238dc98f8a45e44f2a1f6d5bb24c4637c9a5fe6c58550822f",
+      "size": 46521652,
+      "signer_sha256": "113ec0526354587c047183f7f6c1d90ee06d1286b0e848a168b38ad131c05096"
+    }
+  ],
+  "licenses": [
+    {
+      "file": "LICENSE.txt",
+      "sha256": "c7805e7dc266aaa53063ca5b1b8395c02efa0cb793ca7c89938b3c2c382aff3f",
+      "size": 16837
+    },
+    {
+      "file": "LICENSE-3RD-PARTY.txt",
+      "sha256": "242561c5042075ce8eb4a8168db2a1550c99f53ecddf8d74308ee408544b0d25",
+      "size": 46372
+    },
+    {
+      "file": "ZMQ.AUTHORS.txt",
+      "sha256": "989fb459f5a588dac686dd96289b62e693c2ad6174d3bc2ac8826cb810ba1723",
+      "size": 2505
+    },
+    {
+      "file": "SIMDJSON.AUTHORS.txt",
+      "sha256": "a6661f153720cb37eaab684208d4a6ae60d48770c642b27151e011ecb054eaeb",
+      "size": 44
+    }
+  ]
+}

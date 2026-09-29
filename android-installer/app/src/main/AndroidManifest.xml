@@ -11,10 +11,18 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Not requested: QUERY_ALL_PACKAGES. It is a restricted permission and we
-         only ever ask about seven known packages, which <queries> covers. Without
+         only ever ask about nine known packages, which <queries> covers. Without
          these entries getPackageInfo() throws NameNotFoundException on API 30+
-         even for installed apps, and every row would read "not installed". -->
+         even for installed apps, and every row would read "not installed".
+
+         The two vendor display services are here for a second reason: whether
+         device-service is present AS A SYSTEM APP is how this installer decides it is
+         on a 3D tablet at all. Without the entry it would read "absent" on every
+         tablet, hide the service rows, and leave a factory core in place — the state
+         in which DisplayXR runs but 3D does not work. -->
     <queries>
+        <package android:name="com.leialoft.display.config" />
+        <package android:name="com.leia.headtrackingservice" />
         <package android:name="org.freedesktop.monado.openxr_runtime.out_of_process" />
         <package android:name="com.displayxr.model_viewer_vk_android" />
         <package android:name="com.displayxr.mediaplayer_vk_android" />

@@ -262,11 +262,11 @@ jobs:
   # tappable APK that downloads + installs the pinned Android stack. Built by the
   # same workflow PRs run, so the published APK is the gated one, from this commit.
   #
-  # STANDARD flavor only — it carries no vendor bytes. The with-services (cnsdk)
-  # flavor embeds the private vendor display-service APKs and must NEVER land on a
-  # public release; it lives only inside the tablet-bundle zip and as a CI artifact
-  # of build-android-bundle.yml. The release job below re-proves that from the
-  # bytes before attaching anything.
+  # It carries no vendor bytes: on a 3D tablet it DOWNLOADS the pinned display
+  # services from updates.displayxr.org at run time (publish-cnsdk-services.yml).
+  # The old with-services (cnsdk) build that embedded them is retired, but the rule
+  # it forced stays: an installer APK attached to a public release must carry nothing
+  # embedded, and the release job below re-proves that from the bytes.
   build-android-installer:
     needs: assert-versions-in-sync
     uses: ./.github/workflows/build-android-installer.yml
@@ -287,8 +287,8 @@ jobs:
 
       # Belt and braces for the one rule this release must never break: the
       # installer APK attached here is PUBLIC, so it must carry no vendor bytes.
-      # Judged from the APK itself, not from its name — a with-services build that
-      # lost its suffix would sail past a filename check. Exactly one installer APK,
+      # Judged from the APK itself, not from its name — an APK with vendor bytes
+      # embedded under an innocent name would sail past a filename check. Exactly one installer APK,
       # no assets/cnsdk/ tree, and no nested APK of any name inside it.
       - name: The Android installer is the public flavor
         run: |
@@ -311,6 +311,9 @@ jobs:
           tag_name: ${{ inputs.tag }}
           name: DisplayXR ${{ inputs.tag }}
           prerelease: ${{ inputs.prerelease }}
+          # The tablet owner's instructions go FIRST (the generated changelog follows):
+          # most people opening a release page want "how do I install this", not the diff.
+          body_path: .github/release-notes/bundle.md
           generate_release_notes: true
           files: |
             _out/DisplayXRBundle-*.pkg

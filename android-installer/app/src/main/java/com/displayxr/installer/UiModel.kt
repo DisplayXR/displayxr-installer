@@ -52,7 +52,7 @@ sealed class Installed {
 
     /**
      * The version is the release version and may be compared. [versionCode] is
-     * carried for the embedded display services, where it — not the name — is what
+     * carried for the vendor display services, where it — not the name — is what
      * Android's downgrade rule is decided on; see [servicePlannedStatus].
      */
     data class Exact(val version: String, val versionCode: Long? = null) : Installed()
@@ -88,18 +88,28 @@ data class UiState(
     /** Set while the launch-once step is waiting for the owner to unlock. */
     val awaitingUnlock: Boolean = false,
     /**
-     * Set once any embedded display service has been installed in this run, and the
-     * owner must then reboot. Skipping it is invisible: the display service is
-     * replaced under a running system, the lens-controller HAL can be left writing
-     * 3D commands the controller never answers, and every app weaves and tracks
-     * while the glass stays flat 2D (android-bundle/INSTALL.md, "Reboot. It is not
-     * optional"). Sticky for the life of the screen on purpose: the run ends by
-     * opening the runtime, and the notice has to still be there when the owner
-     * comes back.
+     * Set once any display service has been installed in this run, and the owner must
+     * then reboot. Skipping it is invisible: the display service is replaced under a
+     * running system, the lens-controller HAL can be left writing 3D commands the
+     * controller never answers, and every app weaves and tracks while the glass stays
+     * flat 2D (android-bundle/INSTALL.md, "Reboot. It is not optional"). Sticky for the
+     * life of the screen on purpose: the run ends by opening the runtime, and the notice
+     * has to still be there when the owner comes back.
      */
     val rebootRequired: Boolean = false,
-    /** Whether this build carries the display services (the `cnsdk` flavor). */
-    val hasEmbeddedServices: Boolean = false,
+    /**
+     * Whether this is a 3D tablet whose OEM image ships the vendor display services
+     * ([DisplayServices.isTargetDevice]). False hides every service row.
+     */
+    val targetDevice: Boolean = false,
+    /**
+     * Non-null while the display services on this tablet are older than the pin — the
+     * state in which DisplayXR installs and runs but 3D does not work correctly. Shown
+     * as a card at the top; a run that ends in this state must never read as a success.
+     */
+    val servicesWarning: String? = null,
+    /** Licence notices published next to the service APKs (empty until the manifest is read). */
+    val serviceLicenses: List<LicenseFile> = emptyList(),
 )
 
 /**
@@ -120,7 +130,8 @@ fun plannedStatus(installed: Installed, pin: String): RowStatus = when (installe
 }
 
 /**
- * What the run intends to do with an EMBEDDED display service.
+ * What the run intends to do with a vendor display service, against the build the
+ * services manifest describes.
  *
  * Not [plannedStatus], for one reason: for these packages Android decides
  * "downgrade" on `versionCode`, and the vendor's versionCode is a real, readable
@@ -134,7 +145,7 @@ fun plannedStatus(installed: Installed, pin: String): RowStatus = when (installe
  * rests only on Android's own rule, and nothing destructive is offered for any
  * verdict — there is no uninstall anywhere in the app.
  */
-fun servicePlannedStatus(installed: Installed, embedded: EmbeddedApk): RowStatus = when (installed) {
+fun servicePlannedStatus(installed: Installed, target: ServiceApk): RowStatus = when (installed) {
     Installed.Absent -> RowStatus.INSTALL
     is Installed.Opaque -> RowStatus.UPDATE_UNVERIFIABLE
     is Installed.Exact -> {
@@ -142,15 +153,15 @@ fun servicePlannedStatus(installed: Installed, embedded: EmbeddedApk): RowStatus
         when {
             // No readable versionCode: install is offered, "newer" never claimed.
             code == null ->
-                if (Versions.same(installed.version, embedded.versionName)) RowStatus.UP_TO_DATE
+                if (Versions.same(installed.version, target.versionName)) RowStatus.UP_TO_DATE
                 else RowStatus.UPDATE_UNVERIFIABLE
 
-            code > embedded.versionCode -> RowStatus.NEWER_INSTALLED
-            code < embedded.versionCode -> RowStatus.UPDATE
+            code > target.versionCode -> RowStatus.NEWER_INSTALLED
+            code < target.versionCode -> RowStatus.UPDATE
             // Same versionCode. Same name as well is the plain "already current";
             // a different name at the same code is a build we cannot place, and
             // Android permits reinstalling over it, so it is offered, not asserted.
-            Versions.same(installed.version, embedded.versionName) -> RowStatus.UP_TO_DATE
+            Versions.same(installed.version, target.versionName) -> RowStatus.UP_TO_DATE
             else -> RowStatus.UPDATE_UNVERIFIABLE
         }
     }
