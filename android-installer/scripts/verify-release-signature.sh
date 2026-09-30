@@ -35,10 +35,18 @@ aapt2=${AAPT2:-$bt/aapt2}
 
 out=$("$apksigner" verify --verbose --print-certs "$apk" 2>&1) || { echo "$out" >&2; die "$(basename "$apk"): apksigner verify FAILED"; }
 
-signers=$(grep -cE '^Signer #[0-9]+ certificate SHA-256 digest:' <<<"$out" || true)
-[ "$signers" = 1 ] || { echo "$out" >&2; die "$(basename "$apk"): expected exactly 1 signer, found $signers"; }
-got=$(sed -nE 's/^Signer #1 certificate SHA-256 digest: *([0-9a-fA-F]+).*/\1/p' <<<"$out" | tr 'A-F' 'a-f')
-dn=$(sed -nE 's/^Signer #1 certificate DN: *//p' <<<"$out")
+# Two output formats exist: build-tools <= 34 print "Signer #1 certificate SHA-256 digest: …",
+# newer ones print one block per scheme, "V2 Signer: certificate SHA-256 digest: …". Count
+# signers from "Number of signers", and collect every signer-certificate digest in either
+# format (not "public key" digests, not a Source Stamp's) — all of them must be the pin.
+signers=$(sed -nE 's/^Number of signers: *([0-9]+).*/\1/p' <<<"$out" | head -1)
+[ "$signers" = 1 ] || { echo "$out" >&2; die "$(basename "$apk"): expected exactly 1 signer, found '${signers:-none}'"; }
+digests=$(grep -v '^Source Stamp' <<<"$out" \
+  | sed -nE 's/^(Signer #[0-9]+|V[0-9.]+ Signer( #[0-9]+)?):? certificate SHA-256 digest: *([0-9a-fA-F]{64}).*/\3/p' \
+  | tr 'A-F' 'a-f' | sort -u)
+[ -n "$digests" ] || { echo "$out" >&2; die "$(basename "$apk"): apksigner printed no signer certificate digest (unknown output format?)"; }
+dn=$(grep -v '^Source Stamp' <<<"$out" | sed -nE 's/^(Signer #[0-9]+|V[0-9.]+ Signer( #[0-9]+)?):? certificate DN: *//p' | head -1)
+got=$(tr '\n' ' ' <<<"$digests" | sed 's/ $//')
 if [ "$got" != "$pin" ]; then
   die "$(basename "$apk") is signed by '$dn' ($got), NOT the DisplayXR Installer release key ($pin). Tablets could not update to it in place. Refusing."
 fi
