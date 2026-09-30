@@ -23,9 +23,10 @@ You need only the tablet and Wi-Fi — no computer.
 
 If a red **"Display services update needed"** card appears, the installer could not download the
 display services: check the Wi-Fi and tap **Check again**. Until they are updated **3D will not work
-correctly** (content stays 2D, parallax is wrong, apps can freeze). Upgrading the installer itself
-from an older build fails with *"App not installed"* — uninstall the old *DisplayXR Installer* first
-(see *Signing*); the DisplayXR apps are not affected.
+correctly** (content stays 2D, parallax is wrong, apps can freeze). Coming from installer **0.4.1 or
+older** (debug-signed): uninstall the old *DisplayXR Installer* first, once — Android says *"App not
+installed"* otherwise (see *Signing*); the DisplayXR apps are not affected. From 0.4.2 on, the
+installer updates in place.
 
 The same instructions head every bundle release's notes (`.github/release-notes/bundle.md`).
 
@@ -329,8 +330,8 @@ Local, from a checkout (needs a JDK 17+ and an Android SDK; `ANDROID_HOME` must 
 
 ```bash
 cd android-installer
-./gradlew :app:testDebugUnitTest :app:assembleDebug
-# -> app/build/outputs/apk/debug/app-debug.apk
+./gradlew :app:testDebugUnitTest :app:assembleRelease
+# -> app/build/outputs/apk/release/app-release.apk  (debug-key signed unless the release key is set; see Signing)
 ```
 
 Lay out the services for the host from a local copy of the vendor release (what the publishing
@@ -345,7 +346,8 @@ scripts/make-services-manifest.sh --tag v0.10.69 \
 CI:
 
 - `.github/workflows/build-android-installer.yml` runs on every PR that touches this directory: the
-  unit tests (incl. the certificate-pin agreement), the APK, and the no-vendor-bytes check. It names
+  unit tests (incl. the certificate-pin agreement), the release APK, the release-key pin check (see
+  *Signing*), and the no-vendor-bytes check. It names
   the artifact `DisplayXR-Installer-<installerVersionName>.apk` from `gradle.properties` — one
   property drives both the version inside the APK and the file name outside it. Dispatch it with a
   `release_tag` to attach the APK to an existing release.
@@ -358,28 +360,56 @@ CI:
 
 ## Signing
 
-**Debug-signed today, and the consequence is real.** This repo signs nothing, and an *unsigned*
-release APK cannot be installed at all, so CI ships the debug variant. Each CI run signs with that
-runner's **throwaway** debug key, so **upgrading the installer app itself in place fails** with
-`INSTALL_FAILED_UPDATE_INCOMPATIBLE` — uninstall the old installer first. This affects only the
-installer; everything it installs is release-signed by its own repo and upgrades normally.
+**One release key, forever.** Android updates an installed app only from an APK signed with the same
+key, so every published `DisplayXR-Installer-<ver>.apk` from **0.4.2** on is signed with the one
+DisplayXR Installer key:
 
-It matters more now that the installer is on every public release: it is meant to be kept and
-re-run, and it also asks Android for `USER_ACTION_NOT_REQUIRED`, which is honoured only for
-packages it installed itself — a reinstalled installer loses that.
+| | |
+|---|---|
+| Certificate | `CN=DisplayXR Installer, O=DisplayXR`, RSA 4096, SHA256withRSA, valid 2026-09-30 → 2126-09-06 |
+| Certificate SHA-256 (the pin) | `7df5e3233c76abf9544311268e76d57e1240c83805a5fd33ac91a4ab5371f8ce` — [`release-signing-cert.sha256`](release-signing-cert.sha256) |
+| Scheme | APK Signature Scheme v2 only, the shape every DisplayXR APK ships |
+| Where the key is | GitHub environment **`android-installer-release`** on this repo (deployment branch: `main` only): `ANDROID_INSTALLER_KEYSTORE_B64`, `…_KEYSTORE_PASSWORD`, `…_KEY_ALIAS`, `…_KEY_PASSWORD`. An offline backup is held by the repo owner (outside any repo). |
 
-Proposed path (not implemented; needs the repo owner to create a key and secrets):
+How it is enforced:
 
-1. Generate one long-lived upload key for `com.displayxr.installer`: `keytool -genkeypair -v -keystore dxr-installer.jks -alias dxr-installer -keyalg RSA
-   -keysize 4096 -validity 36500`. Back it up offline — **losing it strands every installed copy**,
-   exactly the failure above, permanently.
-2. Store it as repo secrets: `ANDROID_INSTALLER_KEYSTORE_B64`, `ANDROID_INSTALLER_KEYSTORE_PASSWORD`,
-   `ANDROID_INSTALLER_KEY_ALIAS`, `ANDROID_INSTALLER_KEY_PASSWORD`.
-3. Add a `release` `signingConfig` in `app/build.gradle.kts` that reads those from the environment
-   and only exists when they are set, so forks and PRs from forks still build debug.
-4. In CI, build `assembleRelease` when the secrets are present,
-   debug otherwise, and verify the signer with `apksigner verify --print-certs` against a pinned
-   certificate digest before publishing — a key swap should fail the release, not the tablet.
+- `app/build.gradle.kts` signs the **release** variant with the key when `ANDROID_INSTALLER_KEYSTORE_FILE`
+  (+ the password/alias variables) is set, and with the **debug** key otherwise — so a fork's PR or a
+  local build still compiles, tests and installs.
+- CI always builds `assembleRelease`. The key is decoded only in runs on `main` (the environment's
+  branch policy refuses every other ref, even from a workflow edited on a branch).
+- [`scripts/verify-release-signature.sh`](scripts/verify-release-signature.sh) `<apk>` passes only an
+  APK whose single signer's certificate equals the pin (plus a v2/v3 signature and the right package).
+  `build-android-installer.yml` runs it on every build — required when a release depends on it — and
+  proves on every run that it **refuses** the same APK re-signed with a throwaway key.
+  `publish-bundle.yml` requires it in the build job **and** re-runs it on the downloaded bytes right
+  before the release is created; `build-android-bundle.yml` requires it when `publish` is on. A
+  debug-signed APK therefore fails the release, never a tablet. Debug-signed CI artifacts are named
+  `…-DEBUGKEY.apk`.
+
+**Crossing from 0.4.1 or older is the one exception.** Those builds were signed with each CI runner's
+throwaway debug key; Android cannot update across a key change and no app can fix that for itself.
+The upgrade is one-time: uninstall the old *DisplayXR Installer*, install 0.4.2. The apps it installed
+are not affected (they are release-signed by their own repos). The release notes say so.
+
+**Local release-signed build** (needs the keystore, which is never committed — `*.p12`/`*.jks` are
+gitignored):
+
+```bash
+export ANDROID_INSTALLER_KEYSTORE_FILE=/path/to/displayxr-installer-release.p12
+export ANDROID_INSTALLER_KEYSTORE_PASSWORD=… ANDROID_INSTALLER_KEY_PASSWORD=… ANDROID_INSTALLER_KEY_ALIAS=dxr-installer
+./gradlew :app:assembleRelease
+scripts/verify-release-signature.sh app/build/outputs/apk/release/app-release.apk
+```
+
+**If the key is lost**, every installed copy is stranded: each later installer is a different app to
+the tablet. Keep the backup. **If it leaks**, do not simply swap keys (that strands every copy the same
+way): rotate with an APK Signature Scheme v3 lineage (`apksigner rotate`, then sign with `--lineage`
+and v3 on). Tablets (API ≥ 28; all supported ones are 31+) accept the new key as an update of a copy
+signed with the old one, even though that copy was v2-only. Then change the pin to the new certificate
+in the same PR.
+
+Minification stays off (see `app/build.gradle.kts`): R8 cannot be validated without a tablet run.
 
 Never commit a keystore, not even a "debug" one: an installer holding `REQUEST_INSTALL_PACKAGES`
 signed with a public key can be updated by anyone to install anything.
@@ -397,6 +427,8 @@ android-installer/
 ├── gradle.properties                 installerVersionName / installerVersionCode
 ├── scripts/make-services-manifest.sh lays out + verifies the display services for the host
 ├── scripts/service-signers.tsv       the vendor certificate pin (== DisplayServices.PINNED_SIGNERS)
+├── scripts/verify-release-signature.sh  the release gate: APK signer == release-signing-cert.sha256
+├── release-signing-cert.sha256       the installer's own release-certificate pin
 └── app/src/main/java/com/displayxr/installer/
     ├── Catalog.kt               the component table — mirrors install-android-bundle.sh
     ├── UiModel.kt               row/phase model + plannedStatus / servicePlannedStatus (pure, JVM-tested)

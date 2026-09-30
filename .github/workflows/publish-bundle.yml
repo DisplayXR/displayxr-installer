@@ -267,9 +267,17 @@ jobs:
   # The old with-services (cnsdk) build that embedded them is retired, but the rule
   # it forced stays: an installer APK attached to a public release must carry nothing
   # embedded, and the release job below re-proves that from the bytes.
+  #
+  # It must be signed with THE release key (android-installer/release-signing-cert.sha256):
+  # one key forever, or tablets cannot update the installer in place. The key is only
+  # reachable from `main` (environment android-installer-release), so dispatch this
+  # workflow from main; require_release_key fails the build job otherwise, and the
+  # release job re-checks the downloaded bytes before anything is published.
   build-android-installer:
     needs: assert-versions-in-sync
     uses: ./.github/workflows/build-android-installer.yml
+    with:
+      require_release_key: true
 
   release:
     needs: [build-macos, build-windows, build-linux, build-android-installer]
@@ -304,6 +312,18 @@ jobs:
           fi
           ( cd _out && sha256sum -c "$(basename "$a").sha256" )
           echo "OK: $(basename "$a") is the public flavor."
+
+      # The other rule this release must never break: the installer is signed with THE
+      # release key, the one every copy already on a tablet was signed with. An APK signed
+      # with anything else (a debug key, a new key) cannot update those copies in place, so
+      # it fails the release here — never on a tablet. Judged from the downloaded bytes,
+      # independently of the build job's own check.
+      - name: The Android installer is signed with the release key
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(_out/DisplayXR-Installer-*.apk)
+          android-installer/scripts/verify-release-signature.sh "${apks[0]}"
 
       - name: Create release
         uses: softprops/action-gh-release@v3

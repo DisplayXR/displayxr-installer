@@ -5,8 +5,11 @@ _out/
 *.exe
 !installer/windows/*.exe.placeholder
 
-# Local credentials
+# Local credentials — incl. the Android installer's release keystore, which is never committed
 .secrets/
+*.jks
+*.p12
+*.keystore
 .env
 .env.local
 

@@ -1,0 +1,10 @@
+# The ONE key that signs every published DisplayXR-Installer-<ver>.apk (com.displayxr.installer).
+# SHA-256 of its X.509 certificate (lowercase hex, no colons) — public, not a secret.
+#
+#   CN=DisplayXR Installer, O=DisplayXR · RSA 4096 · SHA256withRSA · valid 2026-09-30 .. 2126-09-06
+#
+# scripts/verify-release-signature.sh refuses any APK whose signer is not this certificate, and
+# every workflow that attaches the APK to a release runs it first. Changing this line changes the
+# key every tablet will accept updates from: do it only as part of a v3 key rotation (README,
+# "Signing"), never to make a failing release pass.
+7df5e3233c76abf9544311268e76d57e1240c83805a5fd33ac91a4ab5371f8ce

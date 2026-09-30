@@ -135,8 +135,9 @@ screen before doing so — launching an app behind the lockscreen crashes some d
 The vendor licence notices (the same files as `licenses/`) are published beside the services and
 readable in-app: *Licences for the display services*, at the bottom of the screen.
 
-The installer is currently signed with a per-build debug key, so a newer installer cannot update an
-older one in place: uninstall the old *installer app* first (this does not touch anything it
+From 0.4.2 the installer is signed with one permanent release key, so a newer installer updates an
+older one in place. Installers 0.4.1 and older were signed with a per-build debug key: replacing one
+of those is a one-time uninstall of the old *installer app* first (this does not touch anything it
 installed). The retired `…-with-cnsdk.apk` build is a different app id
 (`com.displayxr.installer.cnsdk`); uninstall it too, so there is one installer on the tablet.
 

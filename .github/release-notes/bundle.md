@@ -20,6 +20,6 @@ The **display services update is downloaded automatically** by the installer and
 
 If the installer shows a red **"Display services update needed"** card, it could not download the display services — check the Wi-Fi and tap **Check again**. Until they are updated, **3D will not work correctly** (content stays 2D, parallax is wrong, apps can freeze).
 
-Upgrading the installer itself from an older build fails with *"App not installed"* (each build is signed with a different key for now) — uninstall the old **DisplayXR Installer** first; your DisplayXR apps are not affected.
+**Already have DisplayXR Installer 0.4.1 or older? One time only:** uninstall the old **DisplayXR Installer** (*Settings → Apps → DisplayXR Installer → Uninstall*), then install this one — otherwise Android says *"App not installed"*. Your DisplayXR apps are not affected. Those older builds were signed with a temporary key; from 0.4.2 on every installer is signed with the same permanent key and updates in place.
 
 ---
