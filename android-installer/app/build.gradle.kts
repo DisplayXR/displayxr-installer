@@ -35,12 +35,53 @@ android {
      * build-android-installer.yml and publish-bundle.yml both check from the file.
      */
 
+    // THE release key (README "Signing"). One key for every published installer, because
+    // Android updates an installed app only from an APK signed by the same key. The keystore
+    // never enters the repo: CI decodes it from the `android-installer-release` environment
+    // secrets (deployable from `main` only) and points these variables at the file.
+    //
+    // Without them — a fork's PR, a local build — the release variant is signed with the
+    // DEBUG key instead, so it still builds and installs for testing, and it can never be
+    // published: every workflow that attaches the APK to a release runs
+    // scripts/verify-release-signature.sh, which refuses any signer but the pinned one.
+    val releaseKeystore = System.getenv("ANDROID_INSTALLER_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                val ks = file(releaseKeystore)
+                require(ks.isFile) { "ANDROID_INSTALLER_KEYSTORE_FILE=$releaseKeystore is not a file" }
+                fun env(name: String) = System.getenv(name)?.takeIf { it.isNotEmpty() }
+                    ?: throw GradleException("ANDROID_INSTALLER_KEYSTORE_FILE is set but $name is not")
+                storeFile = ks
+                storePassword = env("ANDROID_INSTALLER_KEYSTORE_PASSWORD")
+                keyAlias = env("ANDROID_INSTALLER_KEY_ALIAS")
+                keyPassword = env("ANDROID_INSTALLER_KEY_PASSWORD")
+                // v2 only, stated rather than left to AGP's defaults: the shape every other
+                // DisplayXR APK ships (runtime, demos, browser), and the one the release gate
+                // asserts. v3 is not needed to rotate later — a v3 lineage added AT rotation
+                // time is accepted by devices whose installed copy was v2-signed with the old
+                // key (API 28+; every supported tablet is 31+).
+                enableV1Signing = false
+                enableV2Signing = true
+                enableV3Signing = false
+                enableV4Signing = false
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // No minification: the release variant is only ever built to be
-            // sideloaded, and an obfuscated stack trace from a tester's tablet
-            // is worth less than the ~200 KB saved.
+            // No minification: the release variant is sideloaded, and R8 cannot be
+            // validated from a build alone — a stripped ViewModel or ViewBinding shows up
+            // only at run time, on the tablet. The ~200 KB is not worth that risk.
             isMinifyEnabled = false
+            signingConfig = if (releaseKeystore != null) {
+                signingConfigs.getByName("release")
+            } else {
+                logger.warn("android-installer: ANDROID_INSTALLER_KEYSTORE_FILE unset — release variant " +
+                    "signed with the DEBUG key (not publishable).")
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

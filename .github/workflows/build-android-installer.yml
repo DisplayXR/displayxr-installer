@@ -24,6 +24,16 @@ name: build-android-installer
 #
 # publish-bundle.yml calls this via workflow_call, so every public bundle release
 # carries DisplayXR-Installer-<ver>.apk built from the same commit.
+#
+# SIGNING (README "Signing"). Every published installer is signed with ONE release key,
+# because Android updates an installed app only from an APK signed by the same key. The
+# key lives in the `android-installer-release` environment, whose deployment-branch policy
+# admits `main` only — so a PR (fork or not), or a dispatch from any other branch, never
+# sees it, and even a workflow edited on a branch cannot read it. Those runs build the
+# release variant signed with the DEBUG key: it compiles, tests and installs, and it is
+# unpublishable, because scripts/verify-release-signature.sh (run here, and again in
+# publish-bundle.yml right before the release is created) refuses any signer but the one
+# pinned in android-installer/release-signing-cert.sha256.
 
 on:
   pull_request:
@@ -43,17 +53,25 @@ on:
       release_tag:
         type: string
         default: ""
+      # publish-bundle.yml passes true: fail HERE, before anything else of the release
+      # is built on top, if the APK is not signed with the pinned release key.
+      require_release_key:
+        type: boolean
+        default: false
     outputs:
       version:
         description: "installerVersionName the APK was built with"
         value: ${{ jobs.build.outputs.version }}
+      release_signed:
+        description: "'true' when the APK's signer is the pinned release key"
+        value: ${{ jobs.build.outputs.release_signed }}
       artifact:
         description: "Name of the uploaded artifact holding the installer APK + .sha256"
         value: ${{ jobs.build.outputs.artifact }}
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Attach the APK to this existing release (e.g. android-bundle-2026-09-22). Empty = CI artifact only."
+        description: "Attach the APK to this existing release (e.g. android-bundle-2026-09-22). Empty = CI artifact only. Requires the release key, so dispatch from main."
         type: string
         default: ""
 
@@ -63,9 +81,15 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # The signing key's environment, on main only (its branch policy would refuse any other
+    # ref anyway, and a refused environment FAILS the job rather than skipping the key — so
+    # the condition keeps PR and branch runs building, debug-signed). For a workflow_call,
+    # github.* is the caller's: publish-bundle dispatched from main gets the key.
+    environment: ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && 'android-installer-release' || '' }}
     outputs:
       version: ${{ steps.ver.outputs.version }}
       artifact: DisplayXR-Installer-${{ steps.ver.outputs.version }}
+      release_signed: ${{ steps.pin.outputs.release_signed }}
     defaults:
       run:
         working-directory: android-installer
@@ -111,14 +135,72 @@ jobs:
       - name: The services publishing script parses
         run: bash -n scripts/make-services-manifest.sh
 
-      # Debug, not release, and deliberately: an unsigned release APK cannot be
-      # installed at all, and this repo signs nothing (see CLAUDE.md). The cost
-      # is stated in the README: each run signs with that runner's throwaway
-      # debug key, so upgrading the installer itself in place fails with
-      # INSTALL_FAILED_UPDATE_INCOMPATIBLE — uninstall the old one first. It
-      # does not affect anything the installer installs, only the installer.
+      # The keystore goes to a file outside the checkout (RUNNER_TEMP) and is deleted at the
+      # end of the job; only its PATH reaches Gradle. Absent secret = no file = the release
+      # variant falls back to the debug key (app/build.gradle.kts).
+      - name: Decode the release key (main only)
+        env:
+          KS_B64: ${{ secrets.ANDROID_INSTALLER_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KS_B64:-}" ]; then
+            echo "No release key in this run (PR, fork, or not main) — the APK will be DEBUG-signed and unpublishable."
+            exit 0
+          fi
+          ks="$RUNNER_TEMP/dxr-installer-release.p12"
+          ( umask 077; printf '%s' "$KS_B64" | base64 -d > "$ks" )
+          echo "ANDROID_INSTALLER_KEYSTORE_FILE=$ks" >> "$GITHUB_ENV"
+          echo "Release key decoded ($(wc -c < "$ks") bytes)."
+
+      # The release variant, always: signed with the release key when the step above found
+      # one, with the debug key otherwise. One task and one output path for both cases, so
+      # what a PR builds is what a release builds, minus the key.
       - name: Assemble
-        run: ./gradlew --no-daemon :app:assembleDebug
+        env:
+          ANDROID_INSTALLER_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_INSTALLER_KEYSTORE_PASSWORD }}
+          ANDROID_INSTALLER_KEY_ALIAS: ${{ secrets.ANDROID_INSTALLER_KEY_ALIAS }}
+          ANDROID_INSTALLER_KEY_PASSWORD: ${{ secrets.ANDROID_INSTALLER_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon :app:assembleRelease
+
+      # Is it signed with THE key? Judged from the APK's bytes against the committed pin.
+      # Required (and so a failure) when a release depends on it or when the key was
+      # present — a key that is present but produces the wrong signer is a broken secret,
+      # not a PR. Otherwise it is reported and the run stays green.
+      - name: Release-key pin check
+        id: pin
+        env:
+          REQUIRE: ${{ inputs.require_release_key == true || inputs.release_tag != '' || env.ANDROID_INSTALLER_KEYSTORE_FILE != '' }}
+        run: |
+          set -euo pipefail
+          A=app/build/outputs/apk/release/app-release.apk
+          if scripts/verify-release-signature.sh "$A"; then
+            echo "release_signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_signed=false" >> "$GITHUB_OUTPUT"
+            if [ "$REQUIRE" = true ]; then
+              echo "::error::this APK must be signed with the pinned release key and is not — see above"
+              exit 1
+            fi
+            echo "::warning::DEBUG-signed APK (no release key in this run): fine for testing, refused by every publish path."
+          fi
+
+      # Proves the check above can fail: the same bytes re-signed with a key made up on the
+      # spot must be REFUSED. Without this, a verifier that always passed would look exactly
+      # like a working one on main.
+      - name: The pin check refuses a foreign key
+        run: |
+          set -euo pipefail
+          BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          t="$RUNNER_TEMP/negative"; mkdir -p "$t"
+          keytool -genkeypair -keystore "$t/foreign.p12" -storetype PKCS12 -alias x -keyalg EC -groupname secp256r1 \
+            -validity 1 -dname "CN=Not DisplayXR" -storepass throwaway -keypass throwaway >/dev/null 2>&1
+          "$BT/apksigner" sign --ks "$t/foreign.p12" --ks-pass pass:throwaway --ks-key-alias x \
+            --out "$t/foreign.apk" app/build/outputs/apk/release/app-release.apk
+          if scripts/verify-release-signature.sh "$t/foreign.apk"; then
+            echo "::error::verify-release-signature.sh ACCEPTED an APK signed with a throwaway key — the release gate is broken"
+            exit 1
+          fi
+          echo "OK: a foreign-key APK is refused."
 
       # The APK goes on PUBLIC releases, so prove from its bytes that it
       # carries nothing embedded: no assets/cnsdk/ tree and no nested APK of any
@@ -127,7 +209,7 @@ jobs:
       - name: The APK carries no vendor bytes
         run: |
           set -euo pipefail
-          A=app/build/outputs/apk/debug/app-debug.apk
+          A=app/build/outputs/apk/release/app-release.apk
           if unzip -Z1 "$A" | grep -E '^assets/cnsdk/|\.apk$'; then
             echo "::error::the installer APK embeds files it must not — it is published on public releases"
             exit 1
@@ -138,8 +220,12 @@ jobs:
         id: apk
         run: |
           set -euo pipefail
-          SRC=app/build/outputs/apk/debug/app-debug.apk
-          OUT="DisplayXR-Installer-${{ steps.ver.outputs.version }}.apk"
+          SRC=app/build/outputs/apk/release/app-release.apk
+          # A debug-signed build says so in its file name, so a PR artifact passed around
+          # by hand cannot be mistaken for a release (it would not update a tablet's copy).
+          SUFFIX=""
+          [ "${{ steps.pin.outputs.release_signed }}" = true ] || SUFFIX="-DEBUGKEY"
+          OUT="DisplayXR-Installer-${{ steps.ver.outputs.version }}$SUFFIX.apk"
           mkdir -p _out
           cp "$SRC" "_out/$OUT"
           ( cd _out && sha256sum "$OUT" > "$OUT.sha256" )
@@ -154,9 +240,10 @@ jobs:
 
       # Opt-in, and only onto a release that already exists — the bundle release
       # is cut by build-android-bundle.yml, and this attaches to the same tag
-      # rather than creating a second one.
+      # rather than creating a second one. Only a release-signed APK gets here: a
+      # release_tag makes the pin check above required.
       - name: Attach to the release
-        if: inputs.release_tag != ''
+        if: inputs.release_tag != '' && steps.pin.outputs.release_signed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -165,3 +252,7 @@ jobs:
             "_out/${{ steps.apk.outputs.name }}" \
             "_out/${{ steps.apk.outputs.name }}.sha256" \
             --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Remove the decoded key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/dxr-installer-release.p12"

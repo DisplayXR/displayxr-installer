@@ -45,6 +45,10 @@ permissions:
 jobs:
   bundle:
     runs-on: ubuntu-latest
+    # The installer app's signing key (build-android-installer.yml, "SIGNING"): reachable
+    # from main only. From any other branch the installer is debug-signed, and publish=true
+    # then fails at the installer step instead of shipping an APK tablets cannot update to.
+    environment: ${{ github.ref == 'refs/heads/main' && 'android-installer-release' || '' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -270,14 +274,35 @@ jobs:
           packages: ''
 
       - name: Build the installer app
+        env:
+          KS_B64: ${{ secrets.ANDROID_INSTALLER_KEYSTORE_B64 }}
+          ANDROID_INSTALLER_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_INSTALLER_KEYSTORE_PASSWORD }}
+          ANDROID_INSTALLER_KEY_ALIAS: ${{ secrets.ANDROID_INSTALLER_KEY_ALIAS }}
+          ANDROID_INSTALLER_KEY_PASSWORD: ${{ secrets.ANDROID_INSTALLER_KEY_PASSWORD }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           set -euo pipefail
           V=$(grep -E '^installerVersionName=' android-installer/gradle.properties | cut -d= -f2 | tr -d '[:space:]')
           [ -n "$V" ] || { echo "::error::installerVersionName missing from android-installer/gradle.properties"; exit 1; }
-          OUT="DisplayXR-Installer-$V.apk"
           b="_bundle/$BUNDLE"
-          ( cd android-installer && ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug )
-          A=android-installer/app/build/outputs/apk/debug/app-debug.apk
+          # Same signing as build-android-installer.yml: the release key when this run has
+          # it (main), else the debug key. The keystore is a temp file, removed right after.
+          if [ -n "${KS_B64:-}" ]; then
+            export ANDROID_INSTALLER_KEYSTORE_FILE="$RUNNER_TEMP/dxr-installer-release.p12"
+            ( umask 077; printf '%s' "$KS_B64" | base64 -d > "$ANDROID_INSTALLER_KEYSTORE_FILE" )
+          fi
+          ( cd android-installer && ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease )
+          rm -f "$RUNNER_TEMP/dxr-installer-release.p12"
+          A=android-installer/app/build/outputs/apk/release/app-release.apk
+          if android-installer/scripts/verify-release-signature.sh "$A"; then
+            OUT="DisplayXR-Installer-$V.apk"
+          elif [ "$PUBLISH" = true ] || [ -n "${KS_B64:-}" ]; then
+            echo "::error::the installer APK is not signed with the pinned release key — refusing to put it in a published bundle (dispatch from main)"
+            exit 1
+          else
+            echo "::warning::installer APK is DEBUG-signed (not main): fine for a CI-only bundle, never for a published one."
+            OUT="DisplayXR-Installer-$V-DEBUGKEY.apk"
+          fi
           # Same rule as the public release: it must carry nothing embedded.
           if unzip -Z1 "$A" | grep -E '^assets/cnsdk/|\.apk$'; then
             echo "::error::the installer APK embeds files it must not"; exit 1
