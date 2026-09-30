@@ -226,11 +226,14 @@ object DisplayServices {
     }
 
     /**
-     * What Android reads out of the downloaded archive must agree with the manifest AND
-     * with the certificate pin. Pure; the caller feeds it `getPackageArchiveInfo`.
+     * What is read out of the downloaded archive must agree with the manifest AND with the
+     * certificate pin. Pure; the caller feeds it [ApkInstaller.archiveIdentity].
      *
-     * @param signers SHA-256 digests of the archive's CURRENT signing certificate(s),
-     *        or empty when Android could not read them. Exactly one, equal to the pin.
+     * @param signers SHA-256 digests of the archive's CURRENT signing certificate(s), or
+     *        empty when they could not be read. Exactly one, equal to the pin (and so to the
+     *        manifest, whose `signer_sha256` [parseManifest] already held to the pin).
+     * @param signerProblem why [signers] is empty, when something more specific than
+     *        "could not be read" is known (see [combineSigners]).
      * @return null when the archive is acceptable, otherwise the reason it is not.
      */
     fun archiveProblem(
@@ -238,6 +241,7 @@ object DisplayServices {
         archivePackage: String?,
         archiveVersionCode: Long?,
         signers: List<String>,
+        signerProblem: String? = null,
     ): String? {
         val pinned = PINNED_SIGNERS[apk.packageName]
             ?: return "${apk.packageName} is not a display service this installer may install."
@@ -249,15 +253,57 @@ object DisplayServices {
             return "${apk.fileName} is versionCode $archiveVersionCode, not ${apk.versionCode} as the manifest says."
         }
         if (signers.isEmpty()) {
+            if (signerProblem != null) {
+                return "The signing certificate of ${apk.fileName} could not be verified: $signerProblem. " +
+                    "It was deleted and nothing was installed."
+            }
             return "Android could not read the signing certificate of ${apk.fileName}, so it cannot be " +
                 "checked against the vendor key. Refused."
         }
         val norm = signers.map { it.lowercase() }.distinct()
-        if (norm != listOf(pinned)) {
+        if (norm != listOf(pinned) || apk.signerSha256.lowercase() != pinned) {
             return "${apk.fileName} is signed by ${norm.joinToString { it.take(16) + "…" }}, not the " +
                 "vendor key this installer trusts (${pinned.take(16)}…). Refused — nothing was installed."
         }
         return null
+    }
+
+    /**
+     * The archive's signer set, from two independent readers.
+     *
+     * [reader] is [ApkSignatureReader] — this app's own v2/v3 verifier, which does not
+     * depend on the tablet's framework build. [platform] is what
+     * `getPackageArchiveInfo(GET_SIGNING_CERTIFICATES | GET_SIGNATURES)` returned (empty
+     * when Android gave nothing — which the initial Android 13 framework does for
+     * GET_SIGNING_CERTIFICATES alone; see [ApkSignatureReader]).
+     *
+     *  - reader verified: its answer, unless Android named a DIFFERENT set — then nothing,
+     *    because two readers of one file disagreeing is not a state to install from;
+     *  - reader found a signing block that does not verify: nothing, whatever Android says —
+     *    a tampered or forged block is refused, never outvoted;
+     *  - no v2/v3 block (a v1-only APK) or only algorithms the reader does not implement:
+     *    Android's answer, which may be empty (then refused).
+     *
+     * Pure.
+     */
+    fun combineSigners(reader: ApkSignatureReader.Result, platform: List<String>): SignerReading {
+        val plat = platform.map { it.lowercase() }.distinct()
+        return when (reader) {
+            is ApkSignatureReader.Result.Verified -> {
+                if (plat.isNotEmpty() && plat.toSet() != reader.certSha256.toSet()) {
+                    SignerReading(
+                        emptyList(),
+                        "Android reads signer ${plat.joinToString { it.take(16) + "…" }} but the APK's " +
+                            "${reader.scheme} signature names ${reader.certSha256.joinToString { it.take(16) + "…" }}",
+                    )
+                } else {
+                    SignerReading(reader.certSha256, null)
+                }
+            }
+            is ApkSignatureReader.Result.Invalid -> SignerReading(emptyList(), reader.why)
+            is ApkSignatureReader.Result.NoSigningBlock,
+            is ApkSignatureReader.Result.Unsupported -> SignerReading(plat, null)
+        }
     }
 
     // ------------------------------------------------------------ staleness
@@ -312,6 +358,9 @@ data class ServiceApk(
     val size: Long,
     val signerSha256: String,
 )
+
+/** Output of [DisplayServices.combineSigners]: the signer digests, or why there are none. */
+data class SignerReading(val signers: List<String>, val problem: String?)
 
 data class LicenseFile(val name: String, val url: String)
 

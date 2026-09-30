@@ -14,6 +14,16 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
 
+/** What [ApkInstaller.archiveIdentity] read out of a downloaded APK. */
+data class ArchiveIdentity(
+    val packageName: String?,
+    val versionCode: Long?,
+    /** SHA-256 of the current signer certificate(s); empty when none could be verified. */
+    val signers: List<String>,
+    /** Why [signers] is empty, when known. */
+    val signerProblem: String?,
+)
+
 sealed class InstallOutcome {
     object Success : InstallOutcome()
 
@@ -239,23 +249,40 @@ object ApkInstaller {
         context.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)?.packageName
 
     /**
-     * Package name, versionCode and the SHA-256 of the CURRENT signing certificate(s)
-     * of a downloaded archive — the inputs of [DisplayServices.archiveProblem].
+     * Package name, versionCode and the SHA-256 of the CURRENT signing certificate(s) of a
+     * downloaded archive — the inputs of [DisplayServices.archiveProblem].
      *
-     * Current, not historical: with a single signer, `signingCertificateHistory` lists
-     * the rotation lineage oldest-first and its LAST entry is the key the APK is signed
-     * with now; with several signers, `apkContentsSigners` is the set. Anything Android
-     * cannot read comes back empty, and the caller refuses the archive on that.
+     * The certificate is read twice, independently, and combined by
+     * [DisplayServices.combineSigners]:
+     *
+     * 1. [ApkSignatureReader] verifies the APK Signing Block (v2/v3/v3.1) itself. This is
+     *    the reading that matters for the display services, which are v2-signed only.
+     * 2. `getPackageArchiveInfo`. The flags carry the deprecated `GET_SIGNATURES` as well
+     *    as `GET_SIGNING_CERTIFICATES` ON PURPOSE: the initial Android 13 framework
+     *    (`android13-release`, the NP02J/K68's) collects certificates for an archive only
+     *    when `GET_SIGNATURES` is set, so `GET_SIGNING_CERTIFICATES` alone returned a null
+     *    `signingInfo` there and 0.4.0 refused the tablet's own vendor update. Android 12
+     *    and 13 QPR1+ accept either flag.
+     *
+     * Current, not historical: with a single signer, `signingCertificateHistory` lists the
+     * rotation lineage oldest-first and its LAST entry is the key the APK is signed with
+     * now; with several signers, `apkContentsSigners` is the set. The reader likewise
+     * prefers v3.1/v3 (the rotated key) over v2.
+     *
+     * And behind both: Android refuses an update to a system app that is not signed with
+     * that app's key, so a substituted service could not install anyway. This check stays
+     * because it turns that into a sentence on the row, and refuses before the confirmation.
      */
-    fun archiveIdentity(context: Context, apk: File): Triple<String?, Long?, List<String>> {
+    fun archiveIdentity(context: Context, apk: File): ArchiveIdentity {
+        @Suppress("DEPRECATION")
         val info = try {
             context.packageManager.getPackageArchiveInfo(
                 apk.absolutePath,
-                PackageManager.GET_SIGNING_CERTIFICATES,
+                PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES,
             )
         } catch (t: Throwable) {
             null
-        } ?: return Triple(null, null, emptyList())
+        } ?: return ArchiveIdentity(null, null, emptyList(), null)
         val si = info.signingInfo
         val sigs = when {
             si == null -> emptyArray()
@@ -263,8 +290,14 @@ object ApkInstaller {
             else -> si.signingCertificateHistory?.takeLast(1)?.toTypedArray() ?: emptyArray()
         }
         val md = { b: ByteArray -> java.security.MessageDigest.getInstance("SHA-256").digest(b) }
-        val digests = sigs.map { s -> md(s.toByteArray()).joinToString("") { "%02x".format(it) } }
-        return Triple(info.packageName, info.longVersionCode, digests)
+        val platform = sigs.map { s -> md(s.toByteArray()).joinToString("") { "%02x".format(it) } }
+        val own = try {
+            ApkSignatureReader.read(apk, Build.VERSION.SDK_INT)
+        } catch (t: Throwable) {
+            ApkSignatureReader.Result.Invalid("the signing block could not be read (${t.javaClass.simpleName})")
+        }
+        val reading = DisplayServices.combineSigners(own, platform)
+        return ArchiveIdentity(info.packageName, info.longVersionCode, reading.signers, reading.problem)
     }
 
     /**

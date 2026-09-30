@@ -71,8 +71,14 @@ refuses, with a sentence on the row:
   app** (`DisplayServices.PINNED_SIGNERS`: device-service `dbc2792f…811c`, head tracking
   `113ec052…5096`) — before a byte is downloaded;
 - a download whose size or sha256 is not the manifest's (deleted, never handed to Android);
-- an archive whose package, versionCode or **current signing certificate** (read by Android from
-  the file) is not the manifest's and the pin's.
+- an archive whose package, versionCode or **current signing certificate** is not the manifest's
+  and the pin's. The certificate is read **and verified by the app itself** from the APK Signing
+  Block (`ApkSignatureReader`: v3.1 → v3 → v2, the signer's signature over its signed data and the
+  whole-file content digest, so a forged or modified file is refused), and cross-checked against
+  `getPackageArchiveInfo`; if the two disagree, or the block does not verify, it is refused. Android's
+  answer is not enough on its own: the initial Android 13 framework (the NP02J/K68's) collects an
+  archive's certificates only for the deprecated `GET_SIGNATURES` flag, so 0.4.0, which asked with
+  `GET_SIGNING_CERTIFICATES`, got no certificate for the v2-only vendor services and refused them.
 
 And Android itself refuses an update to a built-in app not signed with that app's key. The pin in
 the app and the pin the publisher enforces (`scripts/service-signers.tsv`) are one table in two
@@ -399,6 +405,7 @@ android-installer/
     ├── Net.kt                   HTTP + every typed failure the UI can show
     ├── GitHubReleases.kt        versions.json + pin -> release asset
     ├── ApkInstaller.kt          PackageInstaller sessions and their verdicts; archive identity
+    ├── ApkSignatureReader.kt    v2/v3/v3.1 signing-block verifier: the archive's signer certificate (pure, JVM-tested)
     ├── InstallerViewModel.kt    the run: order, the services, the browser gate, launch-once, keyguard
     └── MainActivity.kt          the screen
 ```
