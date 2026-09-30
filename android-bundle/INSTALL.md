@@ -3,9 +3,10 @@
 Everything needed to bring a Leia tablet up to the current CNSDK + displayxr stack.
 Unzip this folder anywhere and follow **one** of the routes below.
 
-**Easiest: Route D.** Copy `DisplayXR-Installer-<ver>-with-cnsdk.apk` (top level of this folder)
-to the tablet, tap it, press *Install / update*, confirm each package, **reboot** when it says so.
-No computer, no terminal. Details in [Route D](#route-d--the-installer-app-no-computer-no-terminal).
+**Easiest: Route D.** Copy `DisplayXR-Installer-<ver>.apk` (top level of this folder — the same
+APK every public DisplayXR release carries) to the tablet, tap it, press *Install / update*, confirm
+each package, **reboot** when it says so. No computer, no terminal. It downloads the display
+services itself. Details in [Route D](#route-d--the-installer-app-no-computer-no-terminal).
 
 ---
 
@@ -91,45 +92,53 @@ reason a third party could not do it.
 
 ## Route D — the installer app (no computer, no terminal)
 
-The installer app comes in two builds. Both read the published pins, download the runtime,
-demos and (opt-in) browser from their GitHub releases, install them in order, and do steps 1
-and 2 below for you (step 2 as a deep-link — an installer cannot grant an app-op).
+`DisplayXR-Installer-<ver>.apk` — at the top level of this bundle folder, and attached to every
+public DisplayXR release (`vX.Y.Z`). One build for everyone; it carries no vendor bytes. It reads
+the published pins, and **on a 3D tablet** (device-service present as a built-in system app) it
+first downloads the pinned display services from `updates.displayxr.org` — the same CNSDK release
+as `apks/1-cnsdk-services/` here — checks their size, sha256 and the vendor signing certificate,
+and installs them first. Then it downloads the runtime, demos and (opt-in) browser from their
+GitHub releases, installs them in order, and does steps 1 and 2 below for you (step 2 as a
+deep-link — an installer cannot grant an app-op). On any other device the service rows do not
+appear.
 
-| file | where you get it | display services |
-|---|---|---|
-| `DisplayXR-Installer-<ver>-with-cnsdk.apk` | **top level of this bundle folder** | **included** — installed first, from the copies inside the APK |
-| `DisplayXR-Installer-<ver>.apk` | attached to every public DisplayXR release (`vX.Y.Z`) | not included — do step 1 of Route A/B/C first if the tablet needs them |
-
-With this bundle, use the **with-cnsdk** one:
-
-1. Copy `DisplayXR-Installer-<ver>-with-cnsdk.apk` to the tablet (USB, cloud drive, anything) and
-   tap it in a file manager. Allow "install unknown apps" for the file manager when Android asks.
-2. **Unlock the tablet and leave it awake.** Open *DisplayXR Installer + services*, allow it to
-   install apps when it asks, then tap **Install / update**.
-3. Expect **one confirmation per package**: only a device owner or a privileged system app can
-   install silently, and it is neither. The two display services show as *"an update to this
-   built-in application"* — that is expected, and it is why they install at all: they carry the
-   OEM's signing key. They go first, device-service then head tracking, then the runtime and apps.
-   After a display-service update Android may show its own **"App installed — DONE / OPEN"**
+1. Copy the APK to the tablet (USB, cloud drive, or download it on the tablet from the release
+   page) and tap it. Allow "install unknown apps" for the file manager / browser when Android asks.
+2. **Unlock the tablet and leave it awake.** Open *DisplayXR Installer*, allow it to install apps
+   when it asks, tick the browser if you want it, then tap **Install / update**.
+3. Expect **one confirmation per package** (about 9): only a device owner or a privileged system
+   app can install silently, and it is neither. The two display services show as *"an update to
+   this built-in application"* — that is expected, and it is why they install at all: they carry
+   the OEM's signing key. They go first, device-service then head tracking, then the runtime and
+   apps. After a display-service update Android may show its own **"App installed — DONE / OPEN"**
    screen: tap **DONE** (not OPEN). The installer tries to come back on top by itself and waits
-   for it before the next package.
+   for it before the next package. When the runtime opens at the end, **allow its notifications**.
 4. **Reboot when the red card says so.** It appears whenever a display service changed; see
    [Reboot. It is not optional](#reboot-it-is-not-optional-and-skipping-it-looks-like-nothing-at-all).
-   After the reboot, unlock before opening any app.
+   After the reboot, unlock before opening any app. On the Nubia Pad 3D a **USB-mode chooser** may
+   pop up after the reboot — dismiss it.
+5. Back in the installer, **Open the setting** under *Display over other apps* and allow it for
+   DisplayXR (step 2 below).
 
-What it will and will not do: rows already at the carried/pinned version are skipped; a service
-whose installed build is *newer* than the carried one is skipped (Android refuses a downgrade);
-nothing is ever uninstalled. If a confirmation dialog does not appear, the row says so after ~20 s
-and offers RETRY rather than waiting forever. A dropped download resumes by itself; if it still
-fails, the row gets a **Retry download + install** button. The browser checkbox and the reboot
-reminder survive closing and reopening the app. The run ends by opening the runtime once, and waits
-for an unlocked screen before doing so — launching an app behind the lockscreen crashes some demos
-(runtime#1358). The vendor licence notices (the same files as `licenses/`) are inside the APK too:
-*Licences for the bundled display services*, at the bottom of the screen.
+If the display services cannot be downloaded (no network, host unreachable), both service rows say
+*"Display services update needed — could not download it"*, a red card says **3D will not work
+correctly until they are updated**, and a run that installs everything else still ends with
+*NOT READY* rather than a success. Tap **Check again** once the tablet is online.
 
-Both builds are currently signed with a per-build debug key, so a newer installer cannot update an
+What it will and will not do: rows already at the pinned version are skipped; a service whose
+installed build is *newer* than the pinned one is skipped (Android refuses a downgrade); nothing is
+ever uninstalled. If a confirmation dialog does not appear, the row says so after ~20 s and offers
+RETRY rather than waiting forever. A dropped download resumes by itself; if it still fails, the row
+gets a **Retry download + install** button. The browser checkbox and the reboot reminder survive
+closing and reopening the app. The run ends by opening the runtime once, and waits for an unlocked
+screen before doing so — launching an app behind the lockscreen crashes some demos (runtime#1358).
+The vendor licence notices (the same files as `licenses/`) are published beside the services and
+readable in-app: *Licences for the display services*, at the bottom of the screen.
+
+The installer is currently signed with a per-build debug key, so a newer installer cannot update an
 older one in place: uninstall the old *installer app* first (this does not touch anything it
-installed).
+installed). The retired `…-with-cnsdk.apk` build is a different app id
+(`com.displayxr.installer.cnsdk`); uninstall it too, so there is one installer on the tablet.
 
 Source and full scope: [`../android-installer/README.md`](../android-installer/README.md) (in the
 `displayxr-installer` repo).
@@ -285,7 +294,9 @@ button — rotate or dismiss the keyboard if you cannot reach it.
 ## If a CI-built bundle stops appearing
 
 The bundle is assembled by `build-android-bundle.yml` in `displayxr-installer`, which downloads the
-two vendor display-service APKs from a private repo using the `LEIALOFT_GITHUB_TOKEN` secret. That
+two vendor display-service APKs from a private repo using the `LEIALOFT_GITHUB_TOKEN` secret — as
+does `publish-cnsdk-services.yml`, which puts them on `updates.displayxr.org` for the installer app
+(a lapsed token stops a NEW pin from being published there; what is already served keeps working). That
 token is a fine-grained PAT scoped to read that one repo, and it **expires 2027-09-11**. When it
 lapses the build fails at "Download the vendor display services" with a `gh release download` error
 that does not mention expiry. Mint a new token (Contents: Read-only on that repo) and re-set the

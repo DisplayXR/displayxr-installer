@@ -1,0 +1,12 @@
+# The vendor display services, in install order, with the SHA-256 of each one's
+# signing certificate as `apksigner verify --print-certs` prints it.
+#
+# Two consumers, and they must agree (DisplayServicesTest fails if they do not):
+#   - scripts/make-services-manifest.sh refuses to publish an APK signed by anything else;
+#   - DisplayServices.PINNED_SIGNERS in the app refuses to install one.
+# Identical on the NP02J/K68, the Lume Pad 2 and the Lume Phone (measured with apksigner).
+# Changing a line here is a trust decision, not a refresh.
+#
+# role	package	signer-cert-sha256	published-file
+device-service	com.leialoft.display.config	dbc2792f775902a74302d500ab00c6224a4aeb89adb7d5dfdd4c3eeba763811c	device-service.apk
+headtracking-service	com.leia.headtrackingservice	113ec0526354587c047183f7f6c1d90ee06d1286b0e848a168b38ad131c05096	headtracking-service.apk

@@ -42,12 +42,11 @@ data class Component(
     /** Picks this component's asset out of the release's asset list. */
     val assetMatch: (String) -> Boolean,
     /**
-     * Non-null for a component whose APK travels INSIDE this installer instead of
-     * being downloaded — only the vendor display services, and only in the `cnsdk`
-     * flavor. Such a component has no public release to resolve, so [repo],
-     * [pinField] and [assetMatch] are unused for it.
+     * Non-null for a vendor display service. Those come from the services host
+     * (updates.displayxr.org), not from a GitHub release, so [repo] and [assetMatch]
+     * are unused for them; see [DisplayServices].
      */
-    val embedded: EmbeddedApk? = null,
+    val service: ServiceApk? = null,
 )
 
 object Catalog {
@@ -161,32 +160,41 @@ object Catalog {
 
     val runtime: Component = COMPONENTS.first { it.id == "runtime" }
 
-    /** Row id prefix of an embedded service, so it can never collide with a download. */
+    /** Row id prefix of a display service, so it can never collide with a download. */
     const val SERVICE_ID_PREFIX = "service:"
 
     /**
-     * The full install list for this build: the embedded display services FIRST,
-     * in [EmbeddedServices.SERVICE_ORDER], then the downloaded stack. Services go
-     * before the runtime for the same reason Routes A/B/C install them first — the
-     * runtime and every app talk to them — and because their update is what needs
-     * the reboot at the end of the run.
+     * The full install list for this device: the vendor display services FIRST, in
+     * [DisplayServices.SERVICE_ORDER], then the downloaded stack. Services go before the
+     * runtime for the same reason Routes A/B/C install them first — the runtime and every
+     * app talk to them — and because their update is what needs the reboot at the end.
      *
-     * With no embedded bundle (the `standard` flavor) this is exactly [COMPONENTS].
+     * [targetDevice] false (anything that is not a 3D tablet whose OEM image ships
+     * device-service): no service rows at all, exactly [COMPONENTS].
+     *
+     * [manifest] null on a target device (the host could not be read yet): the rows are
+     * still there — they are how the owner learns an update is needed and could not be
+     * fetched — just without a file to install.
      */
-    fun components(embedded: EmbeddedBundle?): List<Component> {
-        val services = embedded?.services.orEmpty().map { apk ->
-            Component(
-                id = SERVICE_ID_PREFIX + apk.packageName,
-                displayName = EmbeddedServices.displayName(apk.packageName),
-                repo = "",
-                pinField = "cnsdk_services",
-                packageName = apk.packageName,
-                assetMatch = { false },
-                embedded = apk,
-            )
+    fun components(targetDevice: Boolean, manifest: ServiceManifest? = null): List<Component> {
+        if (!targetDevice) return COMPONENTS
+        val services = DisplayServices.SERVICE_ORDER.map { pkg ->
+            serviceComponent(pkg, manifest?.services?.firstOrNull { it.packageName == pkg })
         }
         return services + COMPONENTS
     }
+
+    fun serviceComponent(pkg: String, apk: ServiceApk?): Component = Component(
+        id = SERVICE_ID_PREFIX + pkg,
+        displayName = DisplayServices.displayName(pkg),
+        repo = "",
+        pinField = "cnsdk_services",
+        packageName = pkg,
+        assetMatch = { false },
+        service = apk,
+    )
+
+    fun isService(c: Component): Boolean = c.id.startsWith(SERVICE_ID_PREFIX)
 }
 
 /** Version helpers. Pins are tags (`v2.16.36`); versionName is bare (`2.16.36`). */

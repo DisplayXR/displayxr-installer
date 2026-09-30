@@ -66,8 +66,7 @@
                     android:text="@string/btn_retry" />
             </LinearLayout>
 
-            <!-- Shown once an embedded display service has been installed (the
-                 with-services build only). A reboot is the one post-install step
+            <!-- Shown once a display service has been installed (3D tablets only). A reboot is the one post-install step
                  whose omission is invisible: everything reports 3D while the glass
                  stays 2D. So it is a card at the top, not a line in a row. -->
             <LinearLayout
@@ -91,6 +90,40 @@
                     android:layout_marginTop="4dp"
                     android:text="@string/reboot_body"
                     android:textSize="13sp" />
+            </LinearLayout>
+
+            <!-- The display services on this tablet are older than the pin: DisplayXR runs,
+                 but content stays 2D, vertical parallax is inverted and apps can freeze. Raised
+                 when this run cannot fix it (the services host is unreachable) and after any run
+                 that ends in that state, so a factory core never reads as "done". -->
+            <LinearLayout
+                android:id="@+id/servicesCard"
+                style="@style/Card"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/services_title"
+                    android:textColor="@color/dxr_error"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/servicesText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/servicesRetry"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/btn_check_again" />
             </LinearLayout>
 
             <LinearLayout
@@ -192,9 +225,9 @@
                 android:text="@string/footer_launch_once"
                 android:textSize="12sp" />
 
-            <!-- The with-services build redistributes vendor binaries, and their
-                 licences require the notices to travel with them. The files are
-                 inside the APK as assets; this is where a person can read them. -->
+            <!-- The display services are redistributed vendor binaries, and their licences
+                 require the notices to travel with them. They are published beside the APKs
+                 on the services host; this is where a person can read them. -->
             <Button
                 android:id="@+id/licensesBtn"
                 style="?android:attr/borderlessButtonStyle"
