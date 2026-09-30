@@ -12,6 +12,11 @@ You need only the tablet and Wi-Fi — no computer.
 8. **REBOOT the tablet** when the red card says so — hold the power button → *Restart*. **It is not optional**: without it the screen can stay flat 2D while every app reports 3D.
 9. After the reboot, **unlock** the tablet. If a **USB mode** chooser pops up (seen on the Nubia Pad 3D), just dismiss it.
 10. Open **DisplayXR Installer** again and tap **Open the setting** under *"Display over other apps"* → switch it **on** for DisplayXR. Without it, see-through apps show a black background.
+   *Alternative path:* **Settings → Apps → DisplayXR → Display over other apps → Allow**.
+11. If you installed DisplayXR Browser: on its **first launch** Chrome's first-run screens appear — tap **Stay signed out**, then **No thanks**.
+
+The **display services update is downloaded automatically** by the installer and is **required** — do not skip it.
+
 
 If the installer shows a red **"Display services update needed"** card, it could not download the display services — check the Wi-Fi and tap **Check again**. Until they are updated, **3D will not work correctly** (content stays 2D, parallax is wrong, apps can freeze).
 
