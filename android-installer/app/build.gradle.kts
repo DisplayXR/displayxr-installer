@@ -73,4 +73,10 @@ dependencies {
     // The real org.json for JVM tests: android.jar's copy is a stub that throws, and the
     // services manifest parser is exactly the kind of decision these tests exist for.
     testImplementation("org.json:json:20240303")
+    // Signs synthetic APKs AT TEST TIME (v1-only, v2-only, v2+v3, key rotation, two signers)
+    // so ApkSignatureReader is proven on real signing blocks without a single vendor byte or
+    // a checked-in key in the repo. apksig is the library apksigner itself is built on;
+    // bcpkix only mints the throwaway self-signed certificates.
+    testImplementation("com.android.tools.build:apksig:8.7.3")
+    testImplementation("org.bouncycastle:bcpkix-jdk18on:1.77")
 }

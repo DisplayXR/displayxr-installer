@@ -456,8 +456,8 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                             )
                         }
                         DisplayServices.verifyFile(apk, svc)
-                        val (archPkg, archCode, signers) = ApkInstaller.archiveIdentity(ctx, apk)
-                        DisplayServices.archiveProblem(svc, archPkg, archCode, signers)?.let { why ->
+                        val id = ApkInstaller.archiveIdentity(ctx, apk)
+                        DisplayServices.archiveProblem(svc, id.packageName, id.versionCode, id.signers, id.signerProblem)?.let { why ->
                             apk.delete()
                             throw ServiceVerificationException(why)
                         }
