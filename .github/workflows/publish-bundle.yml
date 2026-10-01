@@ -390,9 +390,5 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # NOTE: the OneDrive upload used to live HERE, but this job runs BEFORE the
-      # post-hoc signing (Phase 4.5 of /installer-release), so it always mirrored
-      # the UNSIGNED bundle. It now lives in its own `upload-bundle-onedrive.yml`
-      # (workflow_dispatch), which the /installer-release skill fires AFTER it has
-      # signed the .exe and re-uploaded it over the release asset — so OneDrive
-      # always gets the signed bundle. Do NOT re-add an upload step here.
+      # No mirror step: the GitHub release IS the distribution point (the OneDrive mirror was
+      # retired 2026-10-01 — every asset is on the release page). Do not re-add one.
