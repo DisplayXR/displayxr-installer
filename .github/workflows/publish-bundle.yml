@@ -276,6 +276,11 @@ jobs:
   build-android-installer:
     needs: assert-versions-in-sync
     uses: ./.github/workflows/build-android-installer.yml
+    # The release key lives in the `android-installer-release` environment, which the called
+    # job binds on main. A reusable workflow still reads secrets.* as EMPTY unless the caller
+    # passes them: v2.4.7's first run bound the environment and got no key, so the pin gate
+    # (correctly) refused a debug-signed APK. `inherit` is the minimal fix; the gate is unchanged.
+    secrets: inherit
     with:
       require_release_key: true
 
