@@ -340,14 +340,17 @@ jobs:
           # most people opening a release page want "how do I install this", not the diff.
           body_path: .github/release-notes/bundle.md
           generate_release_notes: true
+          # No .apk.sha256 on the release: GitHub shows every asset's SHA-256 and Android
+          # verifies the signing key, so the extra file only confused readers (2026-10-02).
+          # It is still produced and checked between jobs above.
+          # Keep comments OUTSIDE the block scalar below: inside `files: |` a `#` line is
+          # literal text, so softprops reads it as a file pattern and fail_on_unmatched_files
+          # fails the release (bundle v2.5.5, run 37108074486).
           files: |
             _out/DisplayXRBundle-*.pkg
             _out/DisplayXRBundle-*.exe
             _out/DisplayXRBundle-*-linux-amd64.tar.gz
             _out/DisplayXR-Installer-*.apk
-            # No .apk.sha256 on the release: GitHub shows every asset's SHA-256 and Android
-            # verifies the signing key, so the extra file only confused readers (2026-10-02).
-            # It is still produced and checked between jobs above.
           fail_on_unmatched_files: true
 
       # ---------------------------------------------------------------------
