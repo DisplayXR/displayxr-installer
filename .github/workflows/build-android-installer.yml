@@ -250,7 +250,6 @@ jobs:
           set -euo pipefail
           gh release upload "${{ inputs.release_tag }}" \
             "_out/${{ steps.apk.outputs.name }}" \
-            "_out/${{ steps.apk.outputs.name }}.sha256" \
             --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Remove the decoded key
