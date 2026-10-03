@@ -345,7 +345,9 @@ jobs:
             _out/DisplayXRBundle-*.exe
             _out/DisplayXRBundle-*-linux-amd64.tar.gz
             _out/DisplayXR-Installer-*.apk
-            _out/DisplayXR-Installer-*.apk.sha256
+            # No .apk.sha256 on the release: GitHub shows every asset's SHA-256 and Android
+            # verifies the signing key, so the extra file only confused readers (2026-10-02).
+            # It is still produced and checked between jobs above.
           fail_on_unmatched_files: true
 
       # ---------------------------------------------------------------------
