@@ -133,7 +133,6 @@ ShowUninstDetails show
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${BUNDLE_STAGE}\LICENSE"
-!define MUI_PAGE_CUSTOMFUNCTION_LEAVE ComponentsLeave
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -160,7 +159,19 @@ Var G_ModelViewerInstalled
 Var G_MediaPlayerInstalled
 Var G_AvatarInstalled
 Var G_EarthViewInstalled
-Var G_LeiaProbeHit       ; 1 iff SR Platform DLLs found on disk
+
+; Child-installer failures (install-order epic, runtime #1803 / installer #74).
+; A failing child used to `Abort` its section, which also skipped
+; -FinalizeBundleArp -- the only place the service is restarted after
+; -StopDisplayXRProcesses killed it -- so one bad child left the box with no
+; service until the next logon. Failures are now RECORDED and the chain
+; continues; only a runtime failure stops the remaining children (they all
+; need a runtime), and even then the finalize section runs.
+;   G_ChildFailures  "<Human>=<exit code>; ..." -- written to the bundle's
+;                    ARP key as LastChildFailure, and drives the exit code
+;   G_RuntimeFailed  1 iff the runtime install/upgrade failed
+Var G_ChildFailures
+Var G_RuntimeFailed
 
 ; #1233: human-readable list of components whose registry marker survived
 ; but whose files did not, built in .onInit and printed once at the top of
@@ -222,6 +233,62 @@ Var G_EarthViewVer
 !macroend
 
 ;--------------------------------
+; ChildFailed -- record a failed child installer and keep going.
+;
+; Never a bare modal: every MessageBox carries /SD so a silent (/S) bundle
+; can never block on one. IsRuntime=1 stops the rest of the chain (every
+; other component needs a runtime) without skipping -FinalizeBundleArp;
+; IsRuntime=0 lets the chain continue past the failed component.
+;
+; Args: Human (literal)  Code (a $Var / literal)  IsRuntime (0|1)
+;--------------------------------
+!macro ChildFailed Human Code IsRuntime
+    DetailPrint "ERROR: ${Human} installer exited with code ${Code}."
+    StrCpy $G_ChildFailures "$G_ChildFailures${Human}=${Code}; "
+    !if ${IsRuntime} == 1
+        StrCpy $G_RuntimeFailed 1
+        ; Exit code 6 = a program is holding the runtime; the runtime
+        ; installer names it in its own registry value (under /S it has no
+        ; window of its own).
+        ReadRegStr $R9 HKLM "Software\DisplayXR\Runtime" "LastInstallBlockers"
+        ${If} $R9 != ""
+            DetailPrint "Programs using the runtime: $R9"
+        ${EndIf}
+        DetailPrint "The remaining components will not be installed; the DisplayXR Service is still restarted."
+        MessageBox MB_OK|MB_ICONSTOP "${Human} installer exited with code ${Code}.$\n$\nThe remaining components were not installed. Close any program using DisplayXR and run this installer again." /SD IDOK
+    !else
+        MessageBox MB_OK|MB_ICONEXCLAMATION "${Human} installer exited with code ${Code}.$\n$\nThe other components are still being installed. Run this installer again to retry ${Human}." /SD IDOK
+    !endif
+!macroend
+
+;--------------------------------
+; SkipIfRuntimeFailed -- first statement of every optional section: after a
+; failed runtime install nothing else is installed OR removed. `Return`
+; leaves the section; later sections (incl. -FinalizeBundleArp) still run,
+; which is the difference from the old `Abort`.
+;--------------------------------
+!macro SkipIfRuntimeFailed Human
+    ${If} $G_RuntimeFailed == 1
+        DetailPrint "Skipping ${Human}: the DisplayXR Runtime install failed."
+        Return
+    ${EndIf}
+!macroend
+
+;--------------------------------
+; ChildRemoved -- log the exit code of a Modify-remove uninstall. Recorded
+; as a failure but never fatal. NOTE: an NSIS uninstaller run without
+; `_?=<dir>` re-launches itself from %TEMP% and returns at once, so this
+; code is usually the launcher's (0); it is logged for the cases where the
+; launch itself fails.
+;--------------------------------
+!macro ChildRemoved Human Code
+    DetailPrint "  ${Human} uninstaller exit code: ${Code}"
+    ${If} ${Code} != 0
+        StrCpy $G_ChildFailures "$G_ChildFailures${Human} (remove)=${Code}; "
+    ${EndIf}
+!macroend
+
+;--------------------------------
 ; UpgradeOrSkip — for an ALREADY-installed component, re-run its staged
 ; sub-installer /S only when the bundle's pinned target version is strictly
 ; newer than what's installed (#346). Never downgrades.
@@ -236,9 +303,12 @@ Var G_EarthViewVer
 ; (runtime, leia-plugin; #461 on the runtime repo), "" for the rest. Older child
 ; installers ignore unknown switches, so passing it is always safe.
 ;
-; Args: InstalledVer (a $Var)  TargetVer (literal)  ExeName  Human  ExtraArgs
+; IsRuntime: 1 for the runtime (a failure stops the chain), else 0 -- see
+; ChildFailed.
+;
+; Args: InstalledVer (a $Var)  TargetVer (literal)  ExeName  Human  ExtraArgs  IsRuntime
 ;--------------------------------
-!macro UpgradeOrSkip InstalledVer TargetVer ExeName Human ExtraArgs
+!macro UpgradeOrSkip InstalledVer TargetVer ExeName Human ExtraArgs IsRuntime
     ${VersionCompare} "${InstalledVer}" "${TargetVer}" $R0
     ${If} $R0 == 2
         DetailPrint "Upgrading ${Human} (${InstalledVer} -> ${TargetVer})..."
@@ -246,8 +316,7 @@ Var G_EarthViewVer
         ClearErrors
         ExecWait '"$INSTDIR\${ExeName}" /S ${ExtraArgs}' $0
         ${If} $0 != 0
-            MessageBox MB_OK|MB_ICONSTOP "${Human} installer exited with code $0. Aborting bundle."
-            Abort
+            !insertmacro ChildFailed "${Human}" $0 ${IsRuntime}
         ${EndIf}
         Delete "$INSTDIR\${ExeName}"
     ${Else}
@@ -428,12 +497,17 @@ Section "DisplayXR Runtime (required)" SecRuntime
         ClearErrors
         ExecWait '"$INSTDIR\${RUNTIME_EXE}" /S /NOSTART' $0
         ${If} $0 != 0
-            MessageBox MB_OK|MB_ICONSTOP "DisplayXR Runtime installer exited with code $0. Aborting bundle."
-            Abort
+            !insertmacro ChildFailed "DisplayXR Runtime" $0 1
         ${EndIf}
         Delete "$INSTDIR\${RUNTIME_EXE}"
     ${Else}
-        !insertmacro UpgradeOrSkip $G_RuntimeVer "${RUNTIME_VER}" "${RUNTIME_EXE}" "DisplayXR Runtime" "/NOSTART"
+        !insertmacro UpgradeOrSkip $G_RuntimeVer "${RUNTIME_VER}" "${RUNTIME_EXE}" "DisplayXR Runtime" "/NOSTART" 1
+    ${EndIf}
+
+    ; A failed runtime install/upgrade stops here (the old `Abort` did the
+    ; same, but also skipped -FinalizeBundleArp and so the service restart).
+    ${If} $G_RuntimeFailed == 1
+        Return
     ${EndIf}
 
     ; Re-assert the OpenXR ActiveRuntime registration UNCONDITIONALLY —
@@ -485,6 +559,7 @@ SectionEnd
 
 SectionGroup /e "Workspace" SecGrpWorkspace
     Section "DisplayXR Shell" SecShell
+        !insertmacro SkipIfRuntimeFailed "DisplayXR Shell"
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecShell}
             ${If} $G_ShellInstalled == 0
@@ -493,23 +568,24 @@ SectionGroup /e "Workspace" SecGrpWorkspace
                 ClearErrors
                 ExecWait '"$INSTDIR\${SHELL_EXE}" /S' $0
                 ${If} $0 != 0
-                    MessageBox MB_OK|MB_ICONSTOP "DisplayXR Shell installer exited with code $0. Aborting bundle."
-                    Abort
+                    !insertmacro ChildFailed "DisplayXR Shell" $0 0
                 ${EndIf}
                 Delete "$INSTDIR\${SHELL_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_ShellVer "${SHELL_VER}" "${SHELL_EXE}" "DisplayXR Shell" ""
+                !insertmacro UpgradeOrSkip $G_ShellVer "${SHELL_VER}" "${SHELL_EXE}" "DisplayXR Shell" "" 0
             ${EndIf}
         ${ElseIf} $G_ShellInstalled == 1
             DetailPrint "Removing DisplayXR Shell..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRShell" "UninstallString"
             ${If} $1 != ""
                 ExecWait '$1 /S' $0
+                !insertmacro ChildRemoved "DisplayXR Shell" $0
             ${EndIf}
         ${EndIf}
     SectionEnd
 
     Section "MCP Tools" SecMcp
+        !insertmacro SkipIfRuntimeFailed "DisplayXR MCP Tools"
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecMcp}
             ${If} $G_McpInstalled == 0
@@ -518,18 +594,18 @@ SectionGroup /e "Workspace" SecGrpWorkspace
                 ClearErrors
                 ExecWait '"$INSTDIR\${MCP_EXE}" /S' $0
                 ${If} $0 != 0
-                    MessageBox MB_OK|MB_ICONSTOP "DisplayXR MCP Tools installer exited with code $0. Aborting bundle."
-                    Abort
+                    !insertmacro ChildFailed "DisplayXR MCP Tools" $0 0
                 ${EndIf}
                 Delete "$INSTDIR\${MCP_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_McpVer "${MCP_VER}" "${MCP_EXE}" "DisplayXR MCP Tools" ""
+                !insertmacro UpgradeOrSkip $G_McpVer "${MCP_VER}" "${MCP_EXE}" "DisplayXR MCP Tools" "" 0
             ${EndIf}
         ${ElseIf} $G_McpInstalled == 1
             DetailPrint "Removing DisplayXR MCP Tools..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMCP" "UninstallString"
             ${If} $1 != ""
                 ExecWait '$1 /S' $0
+                !insertmacro ChildRemoved "DisplayXR MCP Tools" $0
             ${EndIf}
         ${EndIf}
     SectionEnd
@@ -537,6 +613,7 @@ SectionGroupEnd
 
 SectionGroup /e "Vendor plug-ins" SecGrpVendors
     Section "Leia SR plug-in" SecLeia
+        !insertmacro SkipIfRuntimeFailed "Leia SR plug-in"
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecLeia}
             ${If} $G_LeiaInstalled == 0
@@ -545,18 +622,18 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
                 ClearErrors
                 ExecWait '"$INSTDIR\${LEIA_EXE}" /S /NOSTART' $0
                 ${If} $0 != 0
-                    MessageBox MB_OK|MB_ICONSTOP "Leia SR plug-in installer exited with code $0. Aborting bundle."
-                    Abort
+                    !insertmacro ChildFailed "Leia SR plug-in" $0 0
                 ${EndIf}
                 Delete "$INSTDIR\${LEIA_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_LeiaVer "${LEIA_VER}" "${LEIA_EXE}" "Leia SR plug-in" "/NOSTART"
+                !insertmacro UpgradeOrSkip $G_LeiaVer "${LEIA_VER}" "${LEIA_EXE}" "Leia SR plug-in" "/NOSTART" 0
             ${EndIf}
         ${ElseIf} $G_LeiaInstalled == 1
             DetailPrint "Removing Leia SR plug-in..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaSR" "UninstallString"
             ${If} $1 != ""
                 ExecWait '$1 /S' $0
+                !insertmacro ChildRemoved "Leia SR plug-in" $0
             ${EndIf}
         ${EndIf}
     SectionEnd
@@ -564,6 +641,7 @@ SectionGroupEnd
 
 SectionGroup /e "Demos & samples" SecGrpDemos
     Section "Gaussian Splat viewer" SecGauss
+        !insertmacro SkipIfRuntimeFailed "Gaussian Splat viewer"
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecGauss}
             ${If} $G_GaussInstalled == 0
@@ -572,23 +650,24 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 ClearErrors
                 ExecWait '"$INSTDIR\${GAUSS_EXE}" /S' $0
                 ${If} $0 != 0
-                    MessageBox MB_OK|MB_ICONSTOP "Gaussian Splat installer exited with code $0. Aborting bundle."
-                    Abort
+                    !insertmacro ChildFailed "Gaussian Splat" $0 0
                 ${EndIf}
                 Delete "$INSTDIR\${GAUSS_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_GaussVer "${GAUSS_VER}" "${GAUSS_EXE}" "Gaussian Splat viewer" ""
+                !insertmacro UpgradeOrSkip $G_GaussVer "${GAUSS_VER}" "${GAUSS_EXE}" "Gaussian Splat viewer" "" 0
             ${EndIf}
         ${ElseIf} $G_GaussInstalled == 1
             DetailPrint "Removing Gaussian Splat viewer..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRGaussianSplat" "UninstallString"
             ${If} $1 != ""
                 ExecWait '$1 /S' $0
+                !insertmacro ChildRemoved "Gaussian Splat viewer" $0
             ${EndIf}
         ${EndIf}
     SectionEnd
 
     Section "3D Model Viewer" SecModelViewer
+        !insertmacro SkipIfRuntimeFailed "3D Model Viewer"
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecModelViewer}
             ${If} $G_ModelViewerInstalled == 0
@@ -597,23 +676,24 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 ClearErrors
                 ExecWait '"$INSTDIR\${MODELVIEWER_EXE}" /S' $0
                 ${If} $0 != 0
-                    MessageBox MB_OK|MB_ICONSTOP "3D Model Viewer installer exited with code $0. Aborting bundle."
-                    Abort
+                    !insertmacro ChildFailed "3D Model Viewer" $0 0
                 ${EndIf}
                 Delete "$INSTDIR\${MODELVIEWER_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_ModelViewerVer "${MODELVIEWER_VER}" "${MODELVIEWER_EXE}" "3D Model Viewer" ""
+                !insertmacro UpgradeOrSkip $G_ModelViewerVer "${MODELVIEWER_VER}" "${MODELVIEWER_EXE}" "3D Model Viewer" "" 0
             ${EndIf}
         ${ElseIf} $G_ModelViewerInstalled == 1
             DetailPrint "Removing 3D Model Viewer..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRModelViewer" "UninstallString"
             ${If} $1 != ""
                 ExecWait '$1 /S' $0
+                !insertmacro ChildRemoved "3D Model Viewer" $0
             ${EndIf}
         ${EndIf}
     SectionEnd
 
     Section "Stereo Media Player" SecMediaPlayer
+        !insertmacro SkipIfRuntimeFailed "Stereo Media Player"
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecMediaPlayer}
             ${If} $G_MediaPlayerInstalled == 0
@@ -622,23 +702,24 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 ClearErrors
                 ExecWait '"$INSTDIR\${MEDIAPLAYER_EXE}" /S' $0
                 ${If} $0 != 0
-                    MessageBox MB_OK|MB_ICONSTOP "Stereo Media Player installer exited with code $0. Aborting bundle."
-                    Abort
+                    !insertmacro ChildFailed "Stereo Media Player" $0 0
                 ${EndIf}
                 Delete "$INSTDIR\${MEDIAPLAYER_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_MediaPlayerVer "${MEDIAPLAYER_VER}" "${MEDIAPLAYER_EXE}" "Stereo Media Player" ""
+                !insertmacro UpgradeOrSkip $G_MediaPlayerVer "${MEDIAPLAYER_VER}" "${MEDIAPLAYER_EXE}" "Stereo Media Player" "" 0
             ${EndIf}
         ${ElseIf} $G_MediaPlayerInstalled == 1
             DetailPrint "Removing Stereo Media Player..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMediaPlayer" "UninstallString"
             ${If} $1 != ""
                 ExecWait '$1 /S' $0
+                !insertmacro ChildRemoved "Stereo Media Player" $0
             ${EndIf}
         ${EndIf}
     SectionEnd
 
     Section "3D Avatar" SecAvatar
+        !insertmacro SkipIfRuntimeFailed "3D Avatar"
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecAvatar}
             ${If} $G_AvatarInstalled == 0
@@ -647,23 +728,24 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 ClearErrors
                 ExecWait '"$INSTDIR\${AVATAR_EXE}" /S' $0
                 ${If} $0 != 0
-                    MessageBox MB_OK|MB_ICONSTOP "3D Avatar installer exited with code $0. Aborting bundle."
-                    Abort
+                    !insertmacro ChildFailed "3D Avatar" $0 0
                 ${EndIf}
                 Delete "$INSTDIR\${AVATAR_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_AvatarVer "${AVATAR_VER}" "${AVATAR_EXE}" "3D Avatar" ""
+                !insertmacro UpgradeOrSkip $G_AvatarVer "${AVATAR_VER}" "${AVATAR_EXE}" "3D Avatar" "" 0
             ${EndIf}
         ${ElseIf} $G_AvatarInstalled == 1
             DetailPrint "Removing 3D Avatar..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRAvatar" "UninstallString"
             ${If} $1 != ""
                 ExecWait '$1 /S' $0
+                !insertmacro ChildRemoved "3D Avatar" $0
             ${EndIf}
         ${EndIf}
     SectionEnd
 
     Section "EarthView" SecEarthView
+        !insertmacro SkipIfRuntimeFailed "EarthView"
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecEarthView}
             ${If} $G_EarthViewInstalled == 0
@@ -672,29 +754,37 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 ClearErrors
                 ExecWait '"$INSTDIR\${EARTHVIEW_EXE}" /S' $0
                 ${If} $0 != 0
-                    MessageBox MB_OK|MB_ICONSTOP "EarthView installer exited with code $0. Aborting bundle."
-                    Abort
+                    !insertmacro ChildFailed "EarthView" $0 0
                 ${EndIf}
                 Delete "$INSTDIR\${EARTHVIEW_EXE}"
             ${Else}
-                !insertmacro UpgradeOrSkip $G_EarthViewVer "${EARTHVIEW_VER}" "${EARTHVIEW_EXE}" "EarthView" ""
+                !insertmacro UpgradeOrSkip $G_EarthViewVer "${EARTHVIEW_VER}" "${EARTHVIEW_EXE}" "EarthView" "" 0
             ${EndIf}
         ${ElseIf} $G_EarthViewInstalled == 1
             DetailPrint "Removing EarthView..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXREarthView" "UninstallString"
             ${If} $1 != ""
                 ExecWait '$1 /S' $0
+                !insertmacro ChildRemoved "EarthView" $0
             ${EndIf}
         ${EndIf}
     SectionEnd
 SectionGroupEnd
 
 ;--------------------------------
-; Hidden bookkeeping section — always runs, writes bundle ARP entry,
-; caches a copy of the bundle .exe for the Modify button.
+; Hidden bookkeeping section — ALWAYS runs, also after a failed child
+; (no section Aborts any more — see G_ChildFailures): writes the bundle
+; ARP entry, caches a copy of the bundle .exe for the Modify button,
+; records the failures, and restarts the service.
 ;--------------------------------
 
 Section "-FinalizeBundleArp"
+    ; After a failed runtime install the bundle did not install this
+    ; version: leave the ARP entry / cache of whatever version was there
+    ; (if any) untouched, exactly as the old Abort did, and go straight to
+    ; the failure record + service restart.
+    StrCmp $G_RuntimeFailed 1 finalize_record
+
     ; Cache the bundle .exe in a stable location so ARP Modify can
     ; re-launch it after the user has discarded the original download.
     CreateDirectory "${BUNDLE_CACHE_DIR}"
@@ -731,14 +821,29 @@ Section "-FinalizeBundleArp"
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
         "NoRepair" 1
 
+  finalize_record:
+    ; Record which children failed (cleared on a clean run). The value
+    ; lives on the bundle's own ARP key; after a failed FIRST install that
+    ; key holds only this value, which Windows does not list (no
+    ; DisplayName) and which the next run or the bundle uninstaller replaces.
+    ${If} $G_ChildFailures != ""
+        StrCpy $G_ChildFailures $G_ChildFailures -2      ; drop the trailing "; "
+        WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
+            "LastChildFailure" "$G_ChildFailures"
+        DetailPrint "Components that did not install cleanly: $G_ChildFailures"
+    ${Else}
+        DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
+            "LastChildFailure"
+    ${EndIf}
+
     ; -----------------------------------------------------------------
     ; #342: Restart displayxr-service so it re-probes display processors
-    ; AFTER every component (esp. the Leia plug-in) has registered its
-    ; HKLM\Software\DisplayXR\DisplayProcessors\* manifest. The runtime
-    ; installer starts the service at the end of its OWN section, which
-    ; runs before the later Leia SR section — so without this, a fresh
-    ; install's service binds the sim-display fallback (ProbeOrder 200)
-    ; instead of leia-sr (50) and shows no weave until the next restart.
+    ; AFTER every component (esp. a vendor plug-in) has registered its
+    ; HKLM\Software\DisplayXR\DisplayProcessors\* entry. The runtime
+    ; installer is passed /NOSTART and -StopDisplayXRProcesses killed any
+    ; running instance, so this is the ONLY start of the chain — which is
+    ; why it must run even when a child failed (a runtime that was already
+    ; installed is still there after a failed upgrade, and must come back).
     ; -----------------------------------------------------------------
     DetailPrint "Restarting DisplayXR Service to re-probe display processors..."
     nsExec::ExecToLog 'taskkill /f /im displayxr-service.exe'
@@ -759,14 +864,22 @@ Section "-FinalizeBundleArp"
     ${Else}
         DetailPrint "displayxr-service.exe not found via Software\DisplayXR\Runtime\InstallPath ($1) — skipping restart."
     ${EndIf}
+
+    ; Exit code for unattended callers: 2 = the runtime failed (nothing
+    ; after it was installed; same code the old Abort produced), 3 = the
+    ; runtime is fine but at least one other component failed. Details in
+    ; the log and in LastChildFailure.
+    ${If} $G_RuntimeFailed == 1
+        SetErrorLevel 2
+    ${ElseIf} $G_ChildFailures != ""
+        SetErrorLevel 3
+    ${EndIf}
 SectionEnd
 
 ;--------------------------------
 ; .onInit — SetRegView 64 (so HKLM\Software\... isn't redirected to
 ; WOW6432Node, which was bug #2 in PR #1), then read each child's
-; current install state and pre-check the matching section. For Leia SR
-; on a fresh-install machine, also probe for SR Platform DLLs to
-; decide whether to default-check the box.
+; current install state and pre-check the matching section.
 ;
 ; Must run AFTER all Section declarations so the ${SecShell} /
 ; ${SecMcp} / ${SecLeia} / ${SecGauss} !defines are populated by NSIS.
@@ -787,7 +900,8 @@ Function .onInit
     StrCpy $G_MediaPlayerInstalled 0
     StrCpy $G_AvatarInstalled  0
     StrCpy $G_EarthViewInstalled 0
-    StrCpy $G_LeiaProbeHit     0
+    StrCpy $G_ChildFailures    ""
+    StrCpy $G_RuntimeFailed    0
     StrCpy $G_RepairList       ""
     StrCpy $G_RuntimeVer       ""
     StrCpy $G_ShellVer         ""
@@ -845,57 +959,19 @@ Function .onInit
         !insertmacro SelectSection ${SecEarthView}
     ${EndIf}
 
-    ; Leia SR — probe SR Platform install path before deciding default.
-    ; The SR Platform installer puts core DLLs under one of these dirs
-    ; (current "LeiaSR" branding + legacy "Simulated Reality" branding,
-    ; both seen in the field). Either present → user has the platform
-    ; layer + likely the hardware, so default-check Leia SR.
-    ${If} ${FileExists} "$PROGRAMFILES64\LeiaSR\Platform\bin\*.dll"
-        StrCpy $G_LeiaProbeHit 1
-    ${ElseIf} ${FileExists} "$PROGRAMFILES32\Simulated Reality\Platform\*.dll"
-        StrCpy $G_LeiaProbeHit 1
-    ${EndIf}
-
+    ; Vendor display plug-in — default-checked like every other component,
+    ; pre-checked when already installed. The bundle does NOT look for the
+    ; vendor's own platform software (install-order epic, runtime #1803,
+    ; B-a): the bundle knows its component list, not vendor paths. A plug-in
+    ; without its platform is inert (the runtime keeps using its sim-display
+    ; fallback) and becomes active once the platform is installed, in either
+    ; order. Gating the default on a vendor path made a silent bundle on a
+    ; box without the platform never install the plug-in at all, so
+    ; installing the platform afterwards changed nothing.
     !insertmacro DetectComponent "DisplayXRLeiaSR" $G_LeiaInstalled $G_LeiaVer "Leia SR plug-in"
     ${If} $0 != ""
         !insertmacro SelectSection ${SecLeia}
-    ${ElseIf} $G_LeiaProbeHit == 1
-        !insertmacro SelectSection ${SecLeia}
-    ${Else}
-        !insertmacro UnselectSection ${SecLeia}
     ${EndIf}
-
-    ; Make the probe miss VISIBLE. Previously the only signal was the
-    ; checkbox silently defaulting to off, which reads as "not offered"
-    ; rather than "you're missing a prerequisite" — the user then finishes
-    ; the bundle believing Leia SR is covered. Non-modal by design: safe
-    ; under /S, and it costs nothing on a box that will never have SR.
-    ; Keyed on the probe alone, so it's equally true (and equally useful)
-    ; on the already-installed-but-SR-missing upgrade path.
-    ${If} $G_LeiaProbeHit == 0
-        SectionSetText ${SecLeia} "Leia SR plug-in (SR Platform not detected)"
-    ${EndIf}
-FunctionEnd
-
-;--------------------------------
-; Components page LEAVE — warn only when the user overrides the default
-; and ticks Leia SR on a box with no SR Platform. That's explicit intent,
-; so a modal is warranted here where a blanket .onInit warning would just
-; be noise on every box that will never have the vendor platform.
-;
-; Page callbacks never run under /S (silent installs skip pages), but the
-; ${Silent} guard is explicit: an unguarded modal reachable from a silent
-; run hangs the bundle forever with no UI to dismiss.
-;--------------------------------
-Function ComponentsLeave
-    ${Unless} ${Silent}
-        ${If} ${SectionIsSelected} ${SecLeia}
-        ${AndIf} $G_LeiaProbeHit == 0
-            MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "The Leia SR Platform was not detected on this machine.$\n$\nThe plug-in will install, but it cannot load until the SR Platform is installed: DisplayXR silently falls back to 2D (sim-display) until then.$\n$\nAfter installing the SR Platform, restart displayxr-service.exe (or reboot) so it picks up the updated PATH.$\n$\nContinue with Leia SR selected?" /SD IDOK IDOK no_sr_platform_ok
-            Abort
-            no_sr_platform_ok:
-        ${EndIf}
-    ${EndUnless}
 FunctionEnd
 
 Function un.onInit
@@ -910,7 +986,7 @@ FunctionEnd
 LangString DESC_SecRuntime ${LANG_ENGLISH} "Core OpenXR runtime, service, and native compositors. Required by every other component."
 LangString DESC_SecShell   ${LANG_ENGLISH} "Spatial workspace + window manager for 3D apps. Multi-app layouts, chrome, file picker."
 LangString DESC_SecMcp     ${LANG_ENGLISH} "Claude / AI control adapter for DisplayXR. Required for the displayxr-mcp Tools experience."
-LangString DESC_SecLeia    ${LANG_ENGLISH} "Display processor for Leia SR 3D monitors. Auto-selected when SR Platform is detected. If it isn't, install the SR Platform first, then re-run this installer (Modify) to add the plug-in."
+LangString DESC_SecLeia    ${LANG_ENGLISH} "Display processor plug-in for Leia SR 3D monitors. Safe to install on any PC: it stays inactive until the monitor's own platform software is installed (before or after DisplayXR)."
 LangString DESC_SecGauss   ${LANG_ENGLISH} "Sample 3D scene viewer (Gaussian splatting renderer). Standalone DisplayXR app."
 LangString DESC_SecModelViewer ${LANG_ENGLISH} "glTF 2.0 PBR model viewer (.glb/.gltf). Standalone DisplayXR app."
 LangString DESC_SecMediaPlayer ${LANG_ENGLISH} "Stereo 3D photo/video media player. Standalone DisplayXR app."
@@ -934,6 +1010,16 @@ LangString DESC_SecEarthView ${LANG_ENGLISH} "Streaming 3D city viewer on Google
 ; Uninstall
 ;--------------------------------
 ;
+; Exit codes are logged, not acted on: an NSIS uninstaller started without
+; `_?=<dir>` copies itself to %TEMP%, relaunches and returns at once, so a 0
+; here means "launched", not "finished". The order below therefore does not
+; rely on any child having completed before the next one starts.
+;
+; Vendor plug-ins are removed by THEIR OWN uninstaller, explicitly, below.
+; Since install-order epic runtime #1803 the runtime uninstaller no longer
+; cascades into plug-in uninstallers nor deletes their registration, so the
+; bundle must not rely on it to remove a plug-in.
+;
 ; Walk each child's UninstallString in reverse install order
 ; (EarthView → Avatar → MediaPlayer → ModelViewer → Gauss → MCP → Leia SR → Shell → Runtime). Runtime last so its
 ; DeleteRegKey /ifempty Software\DisplayXR cleanup catches any orphan
@@ -950,6 +1036,7 @@ Section "Uninstall"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling EarthView..."
         ExecWait '$ChildUninstall /S' $0
+        DetailPrint "  exit code: $0"
     ${EndIf}
 
     ; -- 3D Avatar --
@@ -958,6 +1045,7 @@ Section "Uninstall"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling 3D Avatar..."
         ExecWait '$ChildUninstall /S' $0
+        DetailPrint "  exit code: $0"
     ${EndIf}
 
     ; -- Stereo Media Player --
@@ -966,6 +1054,7 @@ Section "Uninstall"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling Stereo Media Player..."
         ExecWait '$ChildUninstall /S' $0
+        DetailPrint "  exit code: $0"
     ${EndIf}
 
     ; -- 3D Model Viewer --
@@ -974,6 +1063,7 @@ Section "Uninstall"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling 3D Model Viewer..."
         ExecWait '$ChildUninstall /S' $0
+        DetailPrint "  exit code: $0"
     ${EndIf}
 
     ; -- Gaussian Splat viewer --
@@ -982,6 +1072,7 @@ Section "Uninstall"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling Gaussian Splat viewer..."
         ExecWait '$ChildUninstall /S' $0
+        DetailPrint "  exit code: $0"
     ${EndIf}
 
     ; -- MCP Tools --
@@ -994,6 +1085,7 @@ Section "Uninstall"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling DisplayXR MCP Tools..."
         ExecWait '$ChildUninstall /S' $0
+        DetailPrint "  exit code: $0"
     ${EndIf}
 
     ; -- Leia SR Plug-in --
@@ -1002,6 +1094,7 @@ Section "Uninstall"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling Leia SR Plug-in..."
         ExecWait '$ChildUninstall /S' $0
+        DetailPrint "  exit code: $0"
     ${EndIf}
 
     ; -- Shell --
@@ -1010,6 +1103,7 @@ Section "Uninstall"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling DisplayXR Shell..."
         ExecWait '$ChildUninstall /S' $0
+        DetailPrint "  exit code: $0"
     ${EndIf}
 
     ; -- Standalone Unity test/sample apps --
@@ -1035,6 +1129,7 @@ Section "Uninstall"
         ${AndIf} ${FileExists} "$R2\Uninstall.exe"
             DetailPrint "Uninstalling Unity test app '$R0'..."
             ExecWait '"$R2\Uninstall.exe" /S' $0
+            DetailPrint "  exit code: $0"
         ${EndIf}
         DeleteRegKey HKLM "Software\DisplayXR\Unity\$R0"
         IntOp $R1 $R1 + 1
@@ -1049,6 +1144,7 @@ Section "Uninstall"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling DisplayXR Runtime..."
         ExecWait '$ChildUninstall /S' $0
+        DetailPrint "  exit code: $0"
     ${EndIf}
 
     ; Tear down our own ARP entry + every cached bundle .exe.
