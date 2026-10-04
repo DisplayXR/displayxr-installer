@@ -354,6 +354,8 @@ jobs:
           fi
 
       - name: Generate expected/<runtime>.txt from the downloaded artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}   # prove-plugin-marker.sh reads the public plug-in releases
         run: |
           set -euo pipefail
           cd "_bundle/$BUNDLE"
@@ -379,45 +381,46 @@ jobs:
           IMPL=$(shasum -a 256 "$t/libleiaCore-impl.so" | cut -d' ' -f1)
           rm -rf "$t"
 
-          # --- carried forward VERBATIM from the hand-maintained expected/ files ----------
-          # Do NOT regenerate these from the artifact: a marker's whole job is to be absent
-          # from the PREVIOUS build, and one derived from the build in front of you can never
-          # be absent. `request_display_mode` (unsuffixed) was exactly that mistake: present
-          # in 2.6.19 and 2.6.20 alike, so it passed a wrong plug-in.
-          # When the plug-in pin moves, update this block by hand and PROVE the new markers
-          # discriminate — run the gate against the previous artifact and require a FAIL
-          # (android-bundle/README.md, "The expected/ files"). The two cross-checks below
-          # stop the block from rotting silently in the meantime.
+          # --- PLUGIN_EMBEDS: hand-carried feature/CNSDK markers + a PROVEN version marker --
+          # A marker's whole job is to be absent from the PREVIOUS build. `request_display_mode`
+          # (unsuffixed) was the mistake that taught this: present in 2.6.19 and 2.6.20 alike,
+          # so it passed a wrong plug-in (android-bundle/README.md, "The expected/ files").
+          #
+          # The plug-in VERSION marker used to be hand-carried here too, re-measured and edited
+          # on every plug-in bump; it rotted at every bump, and the run failed until someone
+          # re-did the measurement by hand. It is now `PLUGIN_EMBEDS <versions.json leia_plugin>`
+          # and is NOT trusted for being derived: the next step, prove-plugin-marker.sh, runs
+          # the README's discrimination proof on every bundle — the marker must be present in
+          # this runtime's plug-in AND absent (by check-artifacts.sh's own grep) from the
+          # plug-in release immediately before the pin, and the runtime's plug-in .so must be
+          # byte-identical to the pinned release's. A marker present in both builds FAILS there.
+          #
+          # Last hand measurement, 2026-10-03, for the v2.7.6 -> v2.9.0 move (the pin had moved
+          # 2.7.6 -> 2.7.7 -> 2.7.8 -> 2.8.0..2.8.3 -> 2.9.0 since the last bundle). Counts are
+          # `strings -a lib/arm64-v8a/libdxrp050_leia_cnsdk.so | grep -c -F -- <marker>`, the .so
+          # extracted from each vendor runtime APK:
+          #   v2.21.11 APK (plug-in v2.7.6) sha256 ce6c5aec58454d1c59fc78bcdfd1ee72ed32eb3517b4c90ae38babea6949b07c
+          #   v2.21.15 APK (plug-in v2.7.7) sha256 0d9a1050bae5d908b06a50607258ff79309d16a4b43861221f0fa13e98757da5
+          #   v2.25.3  APK (plug-in v2.9.0) sha256 cfad8b338db7d3219a32b3fe514b747f20024e4cada5ea6825f1e0618650b8ae
+          #                                       2.21.11  2.21.15  2.25.3
+          #   v2.7.6                                    1        0       0
+          #   v2.7.7                                    0        1       0
+          #   v2.9.0                                    0        0       1   DISCRIMINATES (pinned)
+          #   cnsdk-android-0.10.69+193.8291a2e        13       13      13   same CNSDK, so NO
+          #   request_display_mode_cnsdk                3        3       3   does NOT
+          #   leia_cnsdk_set_display_mode_3d            3        3       3   does NOT
+          #   get_last_frame_dropped_cnsdk              3        3       3   does NOT
+          # Each APK's .so (2,100,376 bytes) is byte-identical to its plug-in release's Android
+          # tarball .so. All three APKs stamp CNSDK_LOADER 0.10.69 / 0.10.69+193.8291a2e.
+          # The CNSDK build string is unchanged across all three (same CNSDK) and keeps its own
+          # job: cross-check 1 below ties it to the LOADER stamp in the APK manifest. The symbol
+          # markers are feature sanity checks only — they prove no version.
           printf '%s\n' \
             'PLUGIN_EMBEDS cnsdk-android-0.10.69+193.8291a2e' \
             'PLUGIN_EMBEDS get_last_frame_dropped_cnsdk' \
-            '# WHICH OF THESE ACTUALLY DISCRIMINATE the pinned plug-in — measured by extracting' \
-            '# lib/arm64-v8a/libdxrp050_leia_cnsdk.so from BOTH runtime APKs and counting, NOT' \
-            '# assumed. Re-measured 2026-09-28 for the v2.7.0 -> v2.7.6 move, against the runtime' \
-            '# APK the PREVIOUS bundle (android-bundle-20260923) shipped:' \
-            '#   prev: the vendor runtime APK from displayxr-runtime v2.20.1' \
-            '#         sha256 93143fe723b37734aa68b5b4d80a0203482c6731b2e5436a4c931017ca6898a8' \
-            '#         plug-in v2.7.0, .so 2,098,496 bytes' \
-            '#   new : the vendor runtime APK from displayxr-runtime v2.21.11' \
-            '#         sha256 ce6c5aec58454d1c59fc78bcdfd1ee72ed32eb3517b4c90ae38babea6949b07c' \
-            '#         plug-in v2.7.6, .so 2,100,376 bytes' \
-            '# Counts are `strings -a <so> | grep -c -F -- <marker>` (lines containing it), i.e. the' \
-            '# same expression check-artifacts.sh greps with:' \
-            '#                                        2.7.0   2.7.6' \
-            '#   v2.7.6                                   0       1   DISCRIMINATES' \
-            '#   v2.7.0                                   1       0   (the old marker, now absent)' \
-            '#   cnsdk-android-0.10.69+193.8291a2e       13      13   same CNSDK, so NO' \
-            '#   request_display_mode_cnsdk               3       3   does NOT' \
-            '#   leia_cnsdk_set_display_mode_3d           3       3   does NOT' \
-            '#   get_last_frame_dropped_cnsdk             3       3   does NOT' \
-            '# As at every move since 2.6.21, the VERSION STRING is the plug-in-version discriminator;' \
-            '# the CNSDK build string is unchanged (both against cnsdk-android-0.10.69+193.8291a2e) and' \
-            '# keeps its separate job of cross-checking the LOADER stamp in the APK manifest. The symbol' \
-            '# markers stay as feature sanity checks only. A marker believed to prove a version while' \
-            '# present in BOTH artifacts is exactly how a version check FALSE-PASSES.' \
-            'PLUGIN_EMBEDS v2.7.6' \
             'PLUGIN_EMBEDS request_display_mode_cnsdk' \
             'PLUGIN_EMBEDS leia_cnsdk_set_display_mode_3d' \
+            "PLUGIN_EMBEDS ${PLUGIN_PIN}" \
             > "$RUNNER_TEMP/markers.txt"
 
           # Cross-check 1: the carried CNSDK marker against the loader build stamped in the
@@ -425,11 +428,10 @@ jobs:
           grep -q "^PLUGIN_EMBEDS cnsdk-android-${LOADER_BUILD}\$" "$RUNNER_TEMP/markers.txt" || {
             echo "::error::the carried PLUGIN_EMBEDS block pins a CNSDK build that this runtime does not stamp (runtime says ${LOADER_BUILD}). Update the block in this workflow and prove the new markers discriminate against the previous artifact."; exit 1; }
 
-          # Cross-check 2: the carried plug-in version marker against versions.json's pin.
-          m=$(grep -oE '^PLUGIN_EMBEDS v[0-9]+\.[0-9]+\.[0-9]+$' "$RUNNER_TEMP/markers.txt" | awk '{print $2}' | head -1)
-          [ -n "$m" ] || { echo "::error::the carried PLUGIN_EMBEDS block has no plug-in version marker"; exit 1; }
-          [ "$m" = "$PLUGIN_PIN" ] || {
-            echo "::error::carried plug-in marker $m disagrees with versions.json leia_plugin=$PLUGIN_PIN. Update the PLUGIN_EMBEDS block in this workflow to the new build's REAL discriminators and prove they fail against the previous artifact."; exit 1; }
+          # Cross-check 2 (replaces the old "carried marker == versions.json" string compare,
+          # which only proved the block had been edited, not that the marker discriminates).
+          "$GITHUB_WORKSPACE/.github/scripts/prove-plugin-marker.sh" "$RT" "$PLUGIN_PIN" \
+            "cnsdk-android-${LOADER_BUILD}" request_display_mode_cnsdk
 
           {
             echo "# GENERATED by .github/workflows/build-android-bundle.yml — do not hand-edit."
@@ -437,9 +439,9 @@ jobs:
             echo "#"
             echo "# Every sha256 here was computed from the artifact this run downloaded from its"
             echo "# pinned release. That gates the zip's integrity — assembly, transport, unzip —"
-            echo "# not the CHOICE of build, which is versions.json's job. The PLUGIN_EMBEDS block"
-            echo "# is carried forward by hand precisely because it must NOT be derived from the"
-            echo "# artifact it checks."
+            echo "# not the CHOICE of build, which is versions.json's job. The PLUGIN_EMBEDS version"
+            echo "# marker is the versions.json pin, PROVEN this run to be absent from the previous"
+            echo "# plug-in release (prove-plugin-marker.sh); the others are carried by hand."
             for f in $(find apks -name '*.apk' | sort); do
               printf '%s %s\n' "$f" "$(shasum -a 256 "$f" | cut -d' ' -f1)"
             done
