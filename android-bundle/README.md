@@ -177,3 +177,10 @@ for the duration of a run; every script restores it on exit, including on failur
 `PLUGIN_EMBEDS`, `SERVICE_IMPL`). Hashes may be truncated; a prefix of 16 hex characters or more is
 accepted. **Prove any new version marker discriminates**: run the gate against the *previous*
 artifact and require it to fail. A marker present in both versions passed a wrong build once.
+
+In CI (`build-android-bundle.yml`) the plug-in **version** marker is no longer hand-carried: it is
+`PLUGIN_EMBEDS <versions.json leia_plugin>`, and `.github/scripts/prove-plugin-marker.sh` runs that
+proof on every bundle — the marker must be in the runtime APK's plug-in, must be absent (by this
+gate's own grep) from the plug-in release immediately before the pin, and the APK's plug-in `.so`
+must be byte-identical to the pinned release's. Hand-carried markers (the CNSDK build string, the
+symbol markers) still need the manual proof when they change.
