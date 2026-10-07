@@ -1,0 +1,134 @@
+name: android-bundle-latest
+
+# Rolling pointer to the newest PUBLISHED Android tablet bundle.
+#
+# build-android-bundle.yml only ever creates a DRAFT `android-bundle-<date>` pre-release; a human
+# publishes it. This workflow fires on that publish and mirrors the bundle onto a fixed
+# `android-bundle-latest` pre-release, so testers get two links that never change:
+#
+#   page:     https://github.com/DisplayXR/displayxr-installer/releases/tag/android-bundle-latest
+#   download: https://github.com/DisplayXR/displayxr-installer/releases/download/android-bundle-latest/displayxr-tablet-bundle.zip
+#
+# Why not GitHub's own "Latest" flag: a repo has exactly one, and it belongs to the desktop
+# meta-installer — README.md, android-installer/README.md and the website's download page all
+# resolve `releases/latest` and expect the .exe / .pkg / .tar.gz / installer .apk there. Marking a
+# tablet bundle Latest would send every one of those links to a page holding only a bundle zip.
+# So `android-bundle-latest` is always created/kept with --prerelease --latest=false.
+#
+# A `release: published` event from a human (or a user-token `gh release edit --draft=false`)
+# triggers this; one published by GITHUB_TOKEN would not, which is why workflow_dispatch exists
+# to re-point by hand. The pointer never moves backwards: re-publishing an older bundle is a no-op.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published android-bundle-* release to point android-bundle-latest at"
+        required: true
+      force:
+        description: "Point at it even if it is older than the current target"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-bundle-latest
+  cancel-in-progress: false
+
+jobs:
+  point:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (startsWith(github.event.release.tag_name, 'android-bundle-') &&
+       github.event.release.tag_name != 'android-bundle-latest')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      # via env, never inline ${{ }} in the script: a tag name is user-controlled text.
+      SRC_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      FORCE: ${{ inputs.force || false }}
+      POINTER: android-bundle-latest
+      STABLE: displayxr-tablet-bundle.zip
+    steps:
+      - name: Mirror the published bundle onto android-bundle-latest
+        run: |
+          set -euo pipefail
+          case "$SRC_TAG" in
+            android-bundle-latest) echo "::error::refusing to point $POINTER at itself"; exit 1 ;;
+            android-bundle-*) ;;
+            *) echo "::error::$SRC_TAG is not an android-bundle-* release"; exit 1 ;;
+          esac
+
+          src=$(gh release view "$SRC_TAG" --json isDraft,publishedAt,url,assets)
+          [ "$(jq -r .isDraft <<<"$src")" = false ] || { echo "::error::$SRC_TAG is still a draft"; exit 1; }
+          SRC_AT=$(jq -r .publishedAt <<<"$src")
+          SRC_URL=$(jq -r .url <<<"$src")
+          ZIP=$(jq -r '[.assets[].name | select(endswith(".zip"))] | first // empty' <<<"$src")
+          [ -n "$ZIP" ] || { echo "::error::$SRC_TAG has no .zip asset"; exit 1; }
+
+          # Never move backwards (ISO-8601 UTC timestamps compare lexically).
+          CUR_AT=""
+          if gh release view "$POINTER" >/dev/null 2>&1; then
+            CUR_AT=$(gh release view "$POINTER" --json body --jq '.body' \
+                       | sed -n 's/^<!-- source-published-at: \(.*\) -->$/\1/p' | head -1)
+          fi
+          if [ -n "$CUR_AT" ] && [ "$FORCE" != true ] && [[ "$SRC_AT" < "$CUR_AT" ]]; then
+            echo "$SRC_TAG (published $SRC_AT) is older than the current target ($CUR_AT) — leaving $POINTER alone."
+            exit 0
+          fi
+
+          d=$(mktemp -d)
+          gh release download "$SRC_TAG" -D "$d" -p "$ZIP"
+          # Verify against the source's own checksum when it ships one.
+          if gh release download "$SRC_TAG" -D "$d" -p "$ZIP.sha256" 2>/dev/null; then
+            (cd "$d" && sha256sum -c "$ZIP.sha256")
+          fi
+          cp "$d/$ZIP" "$d/$STABLE"
+          (cd "$d" && sha256sum "$STABLE" > "$STABLE.sha256")
+          FILES=("$d/$STABLE" "$d/$STABLE.sha256" "$d/$ZIP")
+          [ -f "$d/$ZIP.sha256" ] && FILES+=("$d/$ZIP.sha256")
+
+          SHA=$(gh api "repos/$GH_REPO/git/ref/tags/$SRC_TAG" --jq .object.sha)
+          # Re-point the git tag (force) so the pointer's source tree matches the bundle's.
+          if gh api "repos/$GH_REPO/git/ref/tags/$POINTER" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/$POINTER" -f sha="$SHA" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$GH_REPO/git/refs" -f ref="refs/tags/$POINTER" -f sha="$SHA" >/dev/null
+          fi
+
+          NOTES=$(cat <<EOF
+          Rolling pointer to the newest published Android tablet bundle — currently **[$SRC_TAG]($SRC_URL)**.
+
+          Stable download (always the newest bundle):
+          \`https://github.com/$GH_REPO/releases/download/$POINTER/$STABLE\`
+
+          \`$ZIP\` is the same bytes under its dated name. Moved automatically by \`android-bundle-latest.yml\` whenever an \`android-bundle-*\` release is published. This is not the repo's "Latest" release — that stays the desktop installer.
+
+          <!-- source-tag: $SRC_TAG -->
+          <!-- source-published-at: $SRC_AT -->
+          EOF
+          )
+
+          if gh release view "$POINTER" >/dev/null 2>&1; then
+            # Drop the previous dated zip so the page only carries the current bundle.
+            gh release view "$POINTER" --json assets --jq '.assets[].name' \
+              | { grep -vxF -e "$STABLE" -e "$STABLE.sha256" -e "$ZIP" -e "$ZIP.sha256" || true; } \
+              | while read -r old; do gh release delete-asset "$POINTER" "$old" -y; done
+            gh release upload "$POINTER" "${FILES[@]}" --clobber
+            gh release edit "$POINTER" --title "Android tablet bundle (latest) — $SRC_TAG" \
+              --notes "$NOTES" --prerelease --latest=false
+          else
+            gh release create "$POINTER" "${FILES[@]}" \
+              --verify-tag --prerelease --latest=false \
+              --title "Android tablet bundle (latest) — $SRC_TAG" --notes "$NOTES"
+          fi
+
+          gh release view "$POINTER" --json tagName,isPrerelease,assets \
+            --jq '{tagName, isPrerelease, assets: [.assets[].name]}'
+          # Belt and braces: the repo's Latest must still be the desktop installer.
+          gh api "repos/$GH_REPO/releases/latest" --jq '"repo Latest = " + .tag_name'

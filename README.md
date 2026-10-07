@@ -12,6 +12,7 @@ Tracks issue [`DisplayXR/displayxr-runtime#284`](https://github.com/DisplayXR/di
 | Windows 10/11 | [latest `.exe`](https://github.com/DisplayXR/displayxr-installer/releases/latest) |
 | Linux (Debian/Ubuntu amd64) | [latest `.tar.gz`](https://github.com/DisplayXR/displayxr-installer/releases/latest) — unpack, then `sudo ./install.sh` |
 | Android 3D tablet (Lume Pad 2, Nubia Pad 3D, Lume Phone) | [latest `DisplayXR-Installer-<ver>.apk`](https://github.com/DisplayXR/displayxr-installer/releases/latest) — step by step: [Install DisplayXR on a Leia tablet](android-installer/README.md#install-displayxr-on-a-leia-tablet-lume-pad-2--nubia-pad-3d--lume-phone) |
+| Android tablet bundle (offline, sideload/adb — testers) | [`displayxr-tablet-bundle.zip`](https://github.com/DisplayXR/displayxr-installer/releases/download/android-bundle-latest/displayxr-tablet-bundle.zip) — always the newest published bundle ([release page](https://github.com/DisplayXR/displayxr-installer/releases/tag/android-bundle-latest)) |
 
 ## One-time install warning (unsigned)
 
