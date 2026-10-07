@@ -415,8 +415,10 @@ jobs:
           # The CNSDK build string is unchanged across all three (same CNSDK) and keeps its own
           # job: cross-check 1 below ties it to the LOADER stamp in the APK manifest. The symbol
           # markers are feature sanity checks only — they prove no version.
+          # 2026-10-07: CNSDK marker moved to 0.10.75+195.eeda9aa (runtime v2.29.0 / CNSDK_TAG v0.10.75,
+          # leia-plugin v2.12.0 — "2D under the lens"); cross-check 1 ties it to the APK stamp.
           printf '%s\n' \
-            'PLUGIN_EMBEDS cnsdk-android-0.10.69+193.8291a2e' \
+            'PLUGIN_EMBEDS cnsdk-android-0.10.75+195.eeda9aa' \
             'PLUGIN_EMBEDS get_last_frame_dropped_cnsdk' \
             'PLUGIN_EMBEDS request_display_mode_cnsdk' \
             'PLUGIN_EMBEDS leia_cnsdk_set_display_mode_3d' \
