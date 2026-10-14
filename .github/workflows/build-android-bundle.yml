@@ -147,9 +147,15 @@ jobs:
           d="_bundle/$BUNDLE/apks/1-cnsdk-services"
           mkdir -p "$d"
           # Capital T in headTracking is load-bearing: asset-name matching is case-sensitive.
+          # Since CNSDK v0.10.76 (CNSDK #724, Blink -> MediaPipe head tracking) the service
+          # APKs are VARIANT-suffixed: -63mm (MediaPipe landmarks + solvePnP, fixed 63 mm IPD;
+          # the pair the release page carries), -autoipd (MediaPipe + demographic IPD models,
+          # ~200 MB) and -blink (the pre-0.10.76 detector; run artifacts only). The bundle
+          # takes -63mm explicitly so a release that ever publishes two variants cannot make
+          # the exactly-one gate below fail, or worse, pick a pair by sort order.
           gh release download "$CNSDK_TAG" -R LeiaInc/CNSDK -D "$d" --clobber \
-             -p 'device-service-release-*.apk' \
-             -p 'headTracking-service-release-*.apk'
+             -p 'device-service-release-*-63mm.apk' \
+             -p 'headTracking-service-release-*-63mm.apk'
           ls -l "$d"
 
           # Third-party notices. The service APKs do NOT embed them, but
@@ -417,8 +423,11 @@ jobs:
           # markers are feature sanity checks only — they prove no version.
           # 2026-10-07: CNSDK marker moved to 0.10.75+195.eeda9aa (runtime v2.29.0 / CNSDK_TAG v0.10.75,
           # leia-plugin v2.12.0 — "2D under the lens"); cross-check 1 ties it to the APK stamp.
+          # 2026-10-14: CNSDK marker moved to 0.10.78+198.2a9d252 (runtime CNSDK_TAG v0.10.78,
+          # leia-plugin v2.15.3 — weave on the runtime's queue + fence ring, CNSDK #748; head
+          # tracking Blink -> MediaPipe, CNSDK #724); cross-check 1 ties it to the APK stamp.
           printf '%s\n' \
-            'PLUGIN_EMBEDS cnsdk-android-0.10.75+195.eeda9aa' \
+            'PLUGIN_EMBEDS cnsdk-android-0.10.78+198.2a9d252' \
             'PLUGIN_EMBEDS get_last_frame_dropped_cnsdk' \
             'PLUGIN_EMBEDS request_display_mode_cnsdk' \
             'PLUGIN_EMBEDS leia_cnsdk_set_display_mode_3d' \
