@@ -88,7 +88,16 @@ echo "======================================================================"
 echo ""
 echo "==> Verifying (displayxr-cli selftest)"
 if command -v displayxr-cli >/dev/null 2>&1; then
-    displayxr-cli selftest
+    # Run the self-test as the user who invoked sudo, not as root: the runtime's
+    # service socket lives in that user's session, and as root the self-test
+    # prints a "Failed to connect to DisplayXR service process" ERROR block
+    # before it still passes — which reads like a failure to a first-time tester.
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && command -v runuser >/dev/null 2>&1; then
+        # login shell: HOME/XDG must be the user's, or the dial still misses the socket
+        runuser -l "$SUDO_USER" -c 'displayxr-cli selftest'
+    else
+        displayxr-cli selftest
+    fi
     echo ""
     echo "DisplayXR installed. Diagnostics: displayxr-cli info"
 else
