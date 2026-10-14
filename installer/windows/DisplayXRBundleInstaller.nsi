@@ -313,8 +313,10 @@ Var G_EarthViewVer
     ${If} $R0 == 2
         DetailPrint "Upgrading ${Human} (${InstalledVer} -> ${TargetVer})..."
         File "${BUNDLE_STAGE}\${ExeName}"
-        ClearErrors
-        ExecWait '"$INSTDIR\${ExeName}" /S ${ExtraArgs}' $0
+        StrCpy $G_ChildExe   "${ExeName}"
+        StrCpy $G_ChildHuman "${Human}"
+        StrCpy $G_ChildArgs  "${ExtraArgs}"
+        Call RunChildInstaller
         ${If} $0 != 0
             !insertmacro ChildFailed "${Human}" $0 ${IsRuntime}
         ${EndIf}
@@ -323,6 +325,116 @@ Var G_EarthViewVer
         DetailPrint "${Human} ${InstalledVer} is current (target ${TargetVer}) — skipping."
     ${EndIf}
 !macroend
+
+;--------------------------------
+; RunChildInstaller — run one staged child installer silently, and turn the
+; runtime installer's "DLL in use" exit into a choice instead of a dead end
+; (displayxr-runtime#2075).
+;
+; Exit code 6 means "a program is using DisplayXRClient.dll; nothing was
+; changed" (runtime #1733). It is distinct from a real failure (2), and the
+; runtime installer writes the programs it could name to
+; HKLM\Software\DisplayXR\Runtime\LastInstallBlockers for exactly this caller:
+; under /S it has no window of its own. The bundle used to print a bare
+; "exited with code 6", which tells the user nothing they can act on.
+;
+; On 6, show the named programs and offer:
+;   Yes    = re-run with /CLOSEAPPS. The runtime installer then asks each
+;            holder to close normally (Restart Manager, never a force kill).
+;            We only pass it after the user says yes, because closing a
+;            user's programs is their call.
+;   No     = the user closed them; re-run as-is.
+;   Cancel = stop. $0 stays 6 and the caller aborts the bundle as before.
+; Only the runtime installer exits 6 today. Other children never trip this,
+; and older runtime installers ignore /CLOSEAPPS, so it is safe for any child.
+;
+; In:  $G_ChildExe (staged filename in $INSTDIR), $G_ChildHuman, $G_ChildArgs
+; Out: $0 = the child's final exit code
+;--------------------------------
+Var G_ChildExe
+Var G_ChildHuman
+Var G_ChildArgs
+
+Function RunChildInstaller
+    Push $R6
+    Push $R7
+    StrCpy $R6 ""            ; extra switches for a retry run
+  rci_run:
+    ClearErrors
+    ExecWait '"$INSTDIR\$G_ChildExe" /S $G_ChildArgs$R6' $0
+    StrCmp $0 "6" 0 rci_done
+
+    ReadRegStr $R7 HKLM "Software\DisplayXR\Runtime" "LastInstallBlockers"
+    ${If} $R7 == ""
+        StrCpy $R7 "  - (Windows did not say which program.)"
+    ${EndIf}
+    DetailPrint "$G_ChildHuman cannot update: DisplayXRClient.dll is in use by:"
+    DetailPrint "$R7"
+    MessageBox MB_YESNOCANCEL|MB_ICONEXCLAMATION "$G_ChildHuman can't update while these programs are using it:$\r$\n$\r$\n$R7$\r$\n$\r$\nClose every OpenXR application, including any web browser tab that has shown a WebXR page.$\r$\n$\r$\nYes$\t= close them for me (each is asked to close normally, so unsaved work can still be saved)$\r$\nNo$\t= I closed them myself, try again$\r$\nCancel$\t= stop the installation (the installed runtime is unchanged)" /SD IDCANCEL IDYES rci_close IDNO rci_retry
+    Goto rci_done
+  rci_close:
+    StrCpy $R6 " /CLOSEAPPS"
+    DetailPrint "Retrying $G_ChildHuman, asking the programs above to close..."
+    Goto rci_run
+  rci_retry:
+    StrCpy $R6 ""
+    DetailPrint "Retrying $G_ChildHuman..."
+    Goto rci_run
+
+  rci_done:
+    Pop $R7
+    Pop $R6
+FunctionEnd
+
+;--------------------------------
+; RuntimeHolderPreflight — before the chain starts, name any program that
+; already has the installed DisplayXRClient.dll loaded and that no installer
+; in the chain will close (displayxr-runtime#2075).
+;
+; The service and shell are stopped by -StopDisplayXRProcesses, and the
+; runtime installer ends browsers' WebXR utility processes itself, so those
+; are left out. Anything else (a Unity editor, a customer app, the DisplayXR
+; Browser's own window) blocks the runtime update. Saying so before anything
+; runs beats a code-6 stop halfway through the chain.
+;
+; 64-bit PowerShell on purpose: this bundle is a 32-bit process, and a 32-bit
+; PowerShell cannot read a 64-bit process's module list. It would find
+; nothing, silently. An elevated 64-bit one can.
+; Advisory only: Ignore continues, and RunChildInstaller still handles a holder
+; that appears later.
+;--------------------------------
+Function RuntimeHolderPreflight
+    Push $0
+    Push $1
+    Push $2
+    Push $3
+
+    ReadRegStr $1 HKLM "Software\DisplayXR\Runtime" "InstallPath"
+    StrCmp $1 "" rhp_done
+    IfFileExists "$1\DisplayXRClient.dll" 0 rhp_done
+
+    StrCpy $3 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    IfFileExists "$3" +2
+    StrCpy $3 "powershell.exe"
+
+  rhp_scan:
+    ; `$$` is a literal '$' for PowerShell.
+    nsExec::ExecToStack `"$3" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference='SilentlyContinue'; $$d=Join-Path '$1' 'DisplayXRClient.dll'; $$cl=@{}; Get-CimInstance Win32_Process | ForEach-Object { $$cl[[int]$$_.ProcessId]=[string]$$_.CommandLine }; Get-Process | Where-Object { $$_.Id -ne $$PID -and $$_.Name -notmatch '^displayxr-(service|shell)$$' -and -not ([string]$$cl[$$_.Id]).Contains('XRDeviceService') -and ($$_.Modules | Where-Object { $$_.FileName -eq $$d }) } | ForEach-Object { '  - ' + $$_.Name + ' (PID ' + $$_.Id + ')' }"`
+    Pop $0   ; exit code
+    Pop $2   ; holder lines
+    StrCmp $2 "" rhp_done
+
+    DetailPrint "DisplayXRClient.dll is in use by:"
+    DetailPrint "$2"
+    MessageBox MB_ABORTRETRYIGNORE|MB_ICONEXCLAMATION "These programs are using DisplayXR and will block the runtime update:$\r$\n$\r$\n$2$\r$\n$\r$\nClose them, then choose Retry.$\r$\n$\r$\nAbort$\t= stop now (nothing has been changed)$\r$\nRetry$\t= check again$\r$\nIgnore$\t= continue anyway (you will be asked again if they are still running)" /SD IDIGNORE IDRETRY rhp_scan IDIGNORE rhp_done
+    Abort
+
+  rhp_done:
+    Pop $3
+    Pop $2
+    Pop $1
+    Pop $0
+FunctionEnd
 
 ;--------------------------------
 ; Unquote — strip one pair of surrounding double quotes from VAR in place.
@@ -479,6 +591,15 @@ Section "-StopDisplayXRProcesses"
         StrCpy $0 $G_RepairList -2      ; drop the trailing ", "
         DetailPrint "Repairing (registry entry present, files missing): $0"
     ${EndIf}
+    ; runtime#2075: warn about foreign holders of the runtime DLL, but only
+    ; when the runtime sub-installer is actually going to run.
+    StrCpy $R0 2
+    ${If} $G_RuntimeInstalled != 0
+        ${VersionCompare} "$G_RuntimeVer" "${RUNTIME_VER}" $R0
+    ${EndIf}
+    ${If} $R0 == 2
+        Call RuntimeHolderPreflight
+    ${EndIf}
     DetailPrint "Stopping DisplayXR processes for the install chain..."
     nsExec::ExecToLog 'taskkill /f /im displayxr-shell.exe'
     Pop $0
@@ -494,8 +615,10 @@ Section "DisplayXR Runtime (required)" SecRuntime
     ${If} $G_RuntimeInstalled == 0
         DetailPrint "Installing DisplayXR Runtime..."
         File "${BUNDLE_STAGE}\${RUNTIME_EXE}"
-        ClearErrors
-        ExecWait '"$INSTDIR\${RUNTIME_EXE}" /S /NOSTART' $0
+        StrCpy $G_ChildExe   "${RUNTIME_EXE}"
+        StrCpy $G_ChildHuman "DisplayXR Runtime"
+        StrCpy $G_ChildArgs  "/NOSTART"
+        Call RunChildInstaller
         ${If} $0 != 0
             !insertmacro ChildFailed "DisplayXR Runtime" $0 1
         ${EndIf}
