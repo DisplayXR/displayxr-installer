@@ -429,8 +429,11 @@ jobs:
           # 2026-10-14 (later): CNSDK marker moved to 0.10.79+200.9aa8ce9 (runtime CNSDK_TAG
           # v0.10.79, leia-plugin v2.15.6 — only CNSDK #752, the per-unit tracking-camera
           # override persist.debug.cnsdk.cam; no API change); cross-check 1 ties it to the stamp.
+          # 2026-10-14 (evening): CNSDK marker moved to 0.10.80+202.528800d (runtime CNSDK_TAG
+          # v0.10.80 — CNSDK #753, per-frame fence/UBO/descriptor ring = layer 2 of the GPU-side
+          # weave-sync chain, runtime ADR-055); cross-check 1 ties it to the APK stamp.
           printf '%s\n' \
-            'PLUGIN_EMBEDS cnsdk-android-0.10.79+200.9aa8ce9' \
+            'PLUGIN_EMBEDS cnsdk-android-0.10.80+202.528800d' \
             'PLUGIN_EMBEDS get_last_frame_dropped_cnsdk' \
             'PLUGIN_EMBEDS request_display_mode_cnsdk' \
             'PLUGIN_EMBEDS leia_cnsdk_set_display_mode_3d' \
