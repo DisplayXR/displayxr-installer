@@ -174,7 +174,7 @@ Var G_ChildFailures
 Var G_RuntimeFailed
 
 ; #1233: human-readable list of components whose registry marker survived
-; but whose files did not, built in .onInit and printed once at the top of
+; but whose files did not (missing, or zero-filled — ProbeContent), built in .onInit and printed once at the top of
 ; the install so a repair run says WHY it is reinstalling.
 Var G_RepairList
 
@@ -354,6 +354,7 @@ Var G_EarthViewVer
 Var G_ChildExe
 Var G_ChildHuman
 Var G_ChildArgs
+Var G_ChildRan   ; 1 once any child installer/uninstaller has run (gates the volume flush)
 
 Function RunChildInstaller
     Push $R6
@@ -361,6 +362,7 @@ Function RunChildInstaller
     StrCpy $R6 ""            ; extra switches for a retry run
   rci_run:
     ClearErrors
+    StrCpy $G_ChildRan 1
     ExecWait '"$INSTDIR\$G_ChildExe" /S $G_ChildArgs$R6' $0
     StrCmp $0 "6" 0 rci_done
 
@@ -525,6 +527,91 @@ Function ProbeComponent
 FunctionEnd
 
 ;--------------------------------
+; ProbeContent — for a component ProbeComponent called intact, look INSIDE
+; its files: is any of them zero-filled?
+;
+; ProbeComponent proves the files exist; it cannot see that one is garbage.
+; A write cut short by a power loss or hard reset can leave NTFS with a
+; file's size committed and its data never flushed — right length, all
+; zeros. Field case (installer#86): a demo's four bundled .glb models read
+; back that way, the viewer showed nothing, and re-running the bundle
+; changed nothing because the marker, the files and the version all looked
+; current, so UpgradeOrSkip answered "current - skipping". Same structural
+; failure as #1233, one level deeper: existence is not integrity.
+;
+; ProbeContentAll runs probe-zero-filled.ps1 ONCE in .onInit over every
+; scanned component's install dir (the parent of its UninstallString) and
+; keeps the verdicts in $G_ProbeOut; ProbeContent just looks a key up there.
+; One launch, not one per component: per-component launches made a no-op
+; bundle run ~4x slower (installer#88 Windows validation).
+;
+; FAILS OPEN — no PowerShell, a script error, a missing verdict all read as
+; intact — so it can only ever add a repair, never block an install.
+;
+; Only for components that OWN their install dir (see DetectComponent's
+; ScanContent): the runtime and the shell share one, so a damaged shell
+; file would be blamed on the runtime, which would then be reinstalled on
+; every run without ever rewriting the shell file.
+;--------------------------------
+Var G_ProbeMap   ; "KEY=dir|KEY=dir|..." built by ProbeAddDir
+Var G_ProbeOut   ; "|KEY=rel\file|...|" from the scanner, "" if it failed
+
+; Stack in: ARP key. Appends "KEY=<install dir>|" to $G_ProbeMap when the
+; key has an UninstallString.
+Function ProbeAddDir
+    Exch $R5
+    Push $R1
+    Push $R3
+    ReadRegStr $R1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$R5" "UninstallString"
+    ${If} $R1 != ""
+        !insertmacro Unquote $R1 $R3
+        ${GetParent} "$R1" $R1
+        StrCpy $G_ProbeMap "$G_ProbeMap$R5=$R1|"
+    ${EndIf}
+    Pop $R3
+    Pop $R1
+    Pop $R5
+FunctionEnd
+
+Function ProbeContentAll
+    StrCpy $G_ProbeOut ""
+    ${If} $G_ProbeMap == ""
+        Return
+    ${EndIf}
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\probe-zero-filled.ps1" -Map "$G_ProbeMap"'
+    Pop $0                   ; exit code ("error" if it could not launch)
+    Pop $1                   ; stdout
+    ${If} $0 == 0
+        StrCpy $G_ProbeOut $1
+    ${EndIf}
+FunctionEnd
+
+; Stack in:  ARP key name
+; Stack out: ""  nothing damaged (or no verdict)
+;            otherwise the first damaged file, relative to the install dir
+Function ProbeContent
+    Exch $R5
+    Push $R1
+    ClearErrors
+    ${WordFind} "$G_ProbeOut" "|$R5=" "E+1}" $R1
+    ${If} ${Errors}
+        StrCpy $R5 ""
+    ${Else}
+        ${WordFind} "$R1" "|" "+1" $R5
+        ${If} $R5 == ""
+            StrCpy $R5 "?"   ; damaged, name unknown — still a repair
+        ${EndIf}
+    ${EndIf}
+    Pop $R1
+    Exch $R5
+FunctionEnd
+
+!macro ProbeAdd ArpKey
+    Push "${ArpKey}"
+    Call ProbeAddDir
+!macroend
+
+;--------------------------------
 ; DetectComponent — ProbeComponent + the per-child bookkeeping .onInit did
 ; inline nine times over. Leaves the verdict in $0 so callers can keep
 ; driving SelectSection off "is there a marker" (`$0 != ""`), which is a
@@ -537,24 +624,41 @@ FunctionEnd
 ; also rewrites the ARP entry and restores the uninstaller, curing an entry
 ; that was unremovable while its uninstaller was missing.
 ;
+; ScanContent 1 also runs ProbeContent over an intact-looking component, and
+; reports a zero-filled file the same way as a missing one: not installed,
+; so it is reinstalled. 1 only for a component that owns its install dir.
+;
 ; Args: ArpKey (literal)  InstalledVar ($Var)  VerVar ($Var)  Human (literal)
+;       ScanContent (0|1)
 ;--------------------------------
-!macro DetectComponent ArpKey InstalledVar VerVar Human
+!macro DetectComponent ArpKey InstalledVar VerVar Human ScanContent
     Push "${ArpKey}"
     Call ProbeComponent
     Pop $0
+    StrCpy $1 "files missing"
+    !if ${ScanContent} == 1
+        ${If} $0 == "1"
+            Push "${ArpKey}"
+            Call ProbeContent
+            Pop $1
+            ${If} $1 != ""
+                StrCpy $0 "0"
+                StrCpy $1 "zero-filled: $1"
+            ${EndIf}
+        ${EndIf}
+    !endif
     ${If} $0 != ""
         ReadRegStr ${VerVar} HKLM \
             "Software\Microsoft\Windows\CurrentVersion\Uninstall\${ArpKey}" "DisplayVersion"
         ${If} $0 == "1"
             StrCpy ${InstalledVar} 1
         ${Else}
-            ; Marker without files. Drop the recorded version too: leaving it
+            ; Marker without (intact) files. Drop the recorded version too: leaving it
             ; set would send this through UpgradeOrSkip, which compares
             ; versions and would answer "current - skipping" over an empty dir.
             StrCpy ${InstalledVar} 0
             StrCpy ${VerVar} ""
-            StrCpy $G_RepairList "$G_RepairList${Human}, "
+            StrCpy $G_RepairList "$G_RepairList${Human} ($1), "
         ${EndIf}
     ${EndIf}
 !macroend
@@ -585,11 +689,11 @@ FunctionEnd
 ;--------------------------------
 Section "-StopDisplayXRProcesses"
     ; #1233: say out loud that this run is a repair, and for what. A
-    ; component listed here had an intact registry marker over missing
-    ; files, so it is being reinstalled rather than version-skipped.
+    ; component listed here had an intact registry marker over missing or
+    ; zero-filled files, so it is being reinstalled rather than version-skipped.
     ${If} $G_RepairList != ""
         StrCpy $0 $G_RepairList -2      ; drop the trailing ", "
-        DetailPrint "Repairing (registry entry present, files missing): $0"
+        DetailPrint "Repairing (registry entry present, files missing or damaged): $0"
     ${EndIf}
     ; runtime#2075: warn about foreign holders of the runtime DLL, but only
     ; when the runtime sub-installer is actually going to run.
@@ -689,6 +793,7 @@ SectionGroup /e "Workspace" SecGrpWorkspace
                 DetailPrint "Installing DisplayXR Shell..."
                 File "${BUNDLE_STAGE}\${SHELL_EXE}"
                 ClearErrors
+                StrCpy $G_ChildRan 1
                 ExecWait '"$INSTDIR\${SHELL_EXE}" /S' $0
                 ${If} $0 != 0
                     !insertmacro ChildFailed "DisplayXR Shell" $0 0
@@ -701,6 +806,7 @@ SectionGroup /e "Workspace" SecGrpWorkspace
             DetailPrint "Removing DisplayXR Shell..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRShell" "UninstallString"
             ${If} $1 != ""
+                StrCpy $G_ChildRan 1
                 ExecWait '$1 /S' $0
                 !insertmacro ChildRemoved "DisplayXR Shell" $0
             ${EndIf}
@@ -715,6 +821,7 @@ SectionGroup /e "Workspace" SecGrpWorkspace
                 DetailPrint "Installing DisplayXR MCP Tools..."
                 File "${BUNDLE_STAGE}\${MCP_EXE}"
                 ClearErrors
+                StrCpy $G_ChildRan 1
                 ExecWait '"$INSTDIR\${MCP_EXE}" /S' $0
                 ${If} $0 != 0
                     !insertmacro ChildFailed "DisplayXR MCP Tools" $0 0
@@ -727,6 +834,7 @@ SectionGroup /e "Workspace" SecGrpWorkspace
             DetailPrint "Removing DisplayXR MCP Tools..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMCP" "UninstallString"
             ${If} $1 != ""
+                StrCpy $G_ChildRan 1
                 ExecWait '$1 /S' $0
                 !insertmacro ChildRemoved "DisplayXR MCP Tools" $0
             ${EndIf}
@@ -743,6 +851,7 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
                 DetailPrint "Installing Leia SR plug-in..."
                 File "${BUNDLE_STAGE}\${LEIA_EXE}"
                 ClearErrors
+                StrCpy $G_ChildRan 1
                 ExecWait '"$INSTDIR\${LEIA_EXE}" /S /NOSTART' $0
                 ${If} $0 != 0
                     !insertmacro ChildFailed "Leia SR plug-in" $0 0
@@ -755,6 +864,7 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
             DetailPrint "Removing Leia SR plug-in..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaSR" "UninstallString"
             ${If} $1 != ""
+                StrCpy $G_ChildRan 1
                 ExecWait '$1 /S' $0
                 !insertmacro ChildRemoved "Leia SR plug-in" $0
             ${EndIf}
@@ -771,6 +881,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 DetailPrint "Installing Gaussian Splat viewer..."
                 File "${BUNDLE_STAGE}\${GAUSS_EXE}"
                 ClearErrors
+                StrCpy $G_ChildRan 1
                 ExecWait '"$INSTDIR\${GAUSS_EXE}" /S' $0
                 ${If} $0 != 0
                     !insertmacro ChildFailed "Gaussian Splat" $0 0
@@ -783,6 +894,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             DetailPrint "Removing Gaussian Splat viewer..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRGaussianSplat" "UninstallString"
             ${If} $1 != ""
+                StrCpy $G_ChildRan 1
                 ExecWait '$1 /S' $0
                 !insertmacro ChildRemoved "Gaussian Splat viewer" $0
             ${EndIf}
@@ -797,6 +909,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 DetailPrint "Installing 3D Model Viewer..."
                 File "${BUNDLE_STAGE}\${MODELVIEWER_EXE}"
                 ClearErrors
+                StrCpy $G_ChildRan 1
                 ExecWait '"$INSTDIR\${MODELVIEWER_EXE}" /S' $0
                 ${If} $0 != 0
                     !insertmacro ChildFailed "3D Model Viewer" $0 0
@@ -809,6 +922,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             DetailPrint "Removing 3D Model Viewer..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRModelViewer" "UninstallString"
             ${If} $1 != ""
+                StrCpy $G_ChildRan 1
                 ExecWait '$1 /S' $0
                 !insertmacro ChildRemoved "3D Model Viewer" $0
             ${EndIf}
@@ -823,6 +937,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 DetailPrint "Installing Stereo Media Player..."
                 File "${BUNDLE_STAGE}\${MEDIAPLAYER_EXE}"
                 ClearErrors
+                StrCpy $G_ChildRan 1
                 ExecWait '"$INSTDIR\${MEDIAPLAYER_EXE}" /S' $0
                 ${If} $0 != 0
                     !insertmacro ChildFailed "Stereo Media Player" $0 0
@@ -835,6 +950,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             DetailPrint "Removing Stereo Media Player..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMediaPlayer" "UninstallString"
             ${If} $1 != ""
+                StrCpy $G_ChildRan 1
                 ExecWait '$1 /S' $0
                 !insertmacro ChildRemoved "Stereo Media Player" $0
             ${EndIf}
@@ -849,6 +965,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 DetailPrint "Installing 3D Avatar..."
                 File "${BUNDLE_STAGE}\${AVATAR_EXE}"
                 ClearErrors
+                StrCpy $G_ChildRan 1
                 ExecWait '"$INSTDIR\${AVATAR_EXE}" /S' $0
                 ${If} $0 != 0
                     !insertmacro ChildFailed "3D Avatar" $0 0
@@ -861,6 +978,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             DetailPrint "Removing 3D Avatar..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRAvatar" "UninstallString"
             ${If} $1 != ""
+                StrCpy $G_ChildRan 1
                 ExecWait '$1 /S' $0
                 !insertmacro ChildRemoved "3D Avatar" $0
             ${EndIf}
@@ -875,6 +993,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
                 DetailPrint "Installing EarthView..."
                 File "${BUNDLE_STAGE}\${EARTHVIEW_EXE}"
                 ClearErrors
+                StrCpy $G_ChildRan 1
                 ExecWait '"$INSTDIR\${EARTHVIEW_EXE}" /S' $0
                 ${If} $0 != 0
                     !insertmacro ChildFailed "EarthView" $0 0
@@ -887,6 +1006,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             DetailPrint "Removing EarthView..."
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXREarthView" "UninstallString"
             ${If} $1 != ""
+                StrCpy $G_ChildRan 1
                 ExecWait '$1 /S' $0
                 !insertmacro ChildRemoved "EarthView" $0
             ${EndIf}
@@ -959,6 +1079,28 @@ Section "-FinalizeBundleArp"
             "LastChildFailure"
     ${EndIf}
 
+    ; Flush the volume cache before declaring the install done (#86). NTFS
+    ; journals metadata, not data: a power loss or hard reset in the minutes
+    ; after the chain exits can keep every file's SIZE and lose its CONTENTS,
+    ; leaving the zero-filled payload #86 found (and ProbeContent now repairs
+    ; on the next run). Checking files right after writing them cannot see this
+    ; -- the read is served from the very cache that has not reached the disk --
+    ; so the fix is to get it to the disk. Write-VolumeCache (Windows 8+, needs
+    ; the elevation the bundle already has) flushes the whole volume, which is
+    ; the only way to cover files the CHILD installers wrote. Best-effort: a
+    ; failure is logged and ignored.
+    ; Skipped when no child ran: a no-op run wrote nothing worth flushing,
+    ; and the flush cost ~2-4 s of a ~4 s no-op (installer#88 validation).
+    ${If} $G_ChildRan == 1
+        StrCpy $2 $PROGRAMFILES64 1
+        DetailPrint "Flushing volume $2: to disk..."
+        nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Write-VolumeCache -DriveLetter $2"'
+        Pop $0
+        ${If} $0 != 0
+            DetailPrint "  volume flush did not complete (exit $0) - continuing."
+        ${EndIf}
+    ${EndIf}
+
     ; -----------------------------------------------------------------
     ; #342: Restart displayxr-service so it re-probes display processors
     ; AFTER every component (esp. a vendor plug-in) has registered its
@@ -1026,6 +1168,7 @@ Function .onInit
     StrCpy $G_ChildFailures    ""
     StrCpy $G_RuntimeFailed    0
     StrCpy $G_RepairList       ""
+    StrCpy $G_ChildRan         0
     StrCpy $G_RuntimeVer       ""
     StrCpy $G_ShellVer         ""
     StrCpy $G_LeiaVer          ""
@@ -1036,48 +1179,62 @@ Function .onInit
     StrCpy $G_AvatarVer        ""
     StrCpy $G_EarthViewVer     ""
 
+    ; ProbeContent's scanner: one run over every ScanContent=1 component
+    ; (keep this list in step with the DetectComponent calls below).
+    InitPluginsDir
+    File "/oname=$PLUGINSDIR\probe-zero-filled.ps1" "${__FILEDIR__}\probe-zero-filled.ps1"
+    StrCpy $G_ProbeMap ""
+    !insertmacro ProbeAdd "DisplayXRMCP"
+    !insertmacro ProbeAdd "DisplayXRGaussianSplat"
+    !insertmacro ProbeAdd "DisplayXRModelViewer"
+    !insertmacro ProbeAdd "DisplayXRMediaPlayer"
+    !insertmacro ProbeAdd "DisplayXRAvatar"
+    !insertmacro ProbeAdd "DisplayXREarthView"
+    !insertmacro ProbeAdd "DisplayXRLeiaSR"
+    Call ProbeContentAll
+
     ; Runtime is RO so its checkbox state can't be unset; still record
     ; install state to skip a redundant /S re-run.
-    !insertmacro DetectComponent "DisplayXR" $G_RuntimeInstalled $G_RuntimeVer "DisplayXR Runtime"
+    !insertmacro DetectComponent "DisplayXR" $G_RuntimeInstalled $G_RuntimeVer "DisplayXR Runtime" 0
 
     ; Shell — default-checked. Pre-checked when already installed too.
-    !insertmacro DetectComponent "DisplayXRShell" $G_ShellInstalled $G_ShellVer "DisplayXR Shell"
+    !insertmacro DetectComponent "DisplayXRShell" $G_ShellInstalled $G_ShellVer "DisplayXR Shell" 0
     ${If} $0 != ""
         !insertmacro SelectSection ${SecShell}
     ${EndIf}
 
     ; MCP — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXRMCP" $G_McpInstalled $G_McpVer "DisplayXR MCP Tools"
+    !insertmacro DetectComponent "DisplayXRMCP" $G_McpInstalled $G_McpVer "DisplayXR MCP Tools" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecMcp}
     ${EndIf}
 
     ; Gauss demo — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXRGaussianSplat" $G_GaussInstalled $G_GaussVer "Gaussian Splat viewer"
+    !insertmacro DetectComponent "DisplayXRGaussianSplat" $G_GaussInstalled $G_GaussVer "Gaussian Splat viewer" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecGauss}
     ${EndIf}
 
     ; Model viewer demo — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXRModelViewer" $G_ModelViewerInstalled $G_ModelViewerVer "3D Model Viewer"
+    !insertmacro DetectComponent "DisplayXRModelViewer" $G_ModelViewerInstalled $G_ModelViewerVer "3D Model Viewer" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecModelViewer}
     ${EndIf}
 
     ; Media player demo — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXRMediaPlayer" $G_MediaPlayerInstalled $G_MediaPlayerVer "Stereo Media Player"
+    !insertmacro DetectComponent "DisplayXRMediaPlayer" $G_MediaPlayerInstalled $G_MediaPlayerVer "Stereo Media Player" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecMediaPlayer}
     ${EndIf}
 
     ; Avatar demo — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXRAvatar" $G_AvatarInstalled $G_AvatarVer "3D Avatar"
+    !insertmacro DetectComponent "DisplayXRAvatar" $G_AvatarInstalled $G_AvatarVer "3D Avatar" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecAvatar}
     ${EndIf}
 
     ; EarthView demo — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXREarthView" $G_EarthViewInstalled $G_EarthViewVer "EarthView"
+    !insertmacro DetectComponent "DisplayXREarthView" $G_EarthViewInstalled $G_EarthViewVer "EarthView" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecEarthView}
     ${EndIf}
@@ -1091,7 +1248,7 @@ Function .onInit
     ; order. Gating the default on a vendor path made a silent bundle on a
     ; box without the platform never install the plug-in at all, so
     ; installing the platform afterwards changed nothing.
-    !insertmacro DetectComponent "DisplayXRLeiaSR" $G_LeiaInstalled $G_LeiaVer "Leia SR plug-in"
+    !insertmacro DetectComponent "DisplayXRLeiaSR" $G_LeiaInstalled $G_LeiaVer "Leia SR plug-in" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecLeia}
     ${EndIf}
