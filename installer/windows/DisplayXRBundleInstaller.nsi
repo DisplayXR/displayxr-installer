@@ -1045,6 +1045,24 @@ Section "-FinalizeBundleArp"
             "LastChildFailure"
     ${EndIf}
 
+    ; Flush the volume cache before declaring the install done (#86). NTFS
+    ; journals metadata, not data: a power loss or hard reset in the minutes
+    ; after the chain exits can keep every file's SIZE and lose its CONTENTS,
+    ; leaving the zero-filled payload #86 found (and ProbeContent now repairs
+    ; on the next run). Checking files right after writing them cannot see this
+    ; -- the read is served from the very cache that has not reached the disk --
+    ; so the fix is to get it to the disk. Write-VolumeCache (Windows 8+, needs
+    ; the elevation the bundle already has) flushes the whole volume, which is
+    ; the only way to cover files the CHILD installers wrote. Best-effort: a
+    ; failure is logged and ignored.
+    StrCpy $2 $PROGRAMFILES64 1
+    DetailPrint "Flushing volume $2: to disk..."
+    nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Write-VolumeCache -DriveLetter $2"'
+    Pop $0
+    ${If} $0 != 0
+        DetailPrint "  volume flush did not complete (exit $0) - continuing."
+    ${EndIf}
+
     ; -----------------------------------------------------------------
     ; #342: Restart displayxr-service so it re-probes display processors
     ; AFTER every component (esp. a vendor plug-in) has registered its
