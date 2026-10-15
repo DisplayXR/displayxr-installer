@@ -174,7 +174,7 @@ Var G_ChildFailures
 Var G_RuntimeFailed
 
 ; #1233: human-readable list of components whose registry marker survived
-; but whose files did not, built in .onInit and printed once at the top of
+; but whose files did not (missing, or zero-filled — ProbeContent), built in .onInit and printed once at the top of
 ; the install so a repair run says WHY it is reinstalling.
 Var G_RepairList
 
@@ -525,6 +525,75 @@ Function ProbeComponent
 FunctionEnd
 
 ;--------------------------------
+; ProbeContent — for a component ProbeComponent called intact, look INSIDE
+; its files: is any of them zero-filled?
+;
+; ProbeComponent proves the files exist; it cannot see that one is garbage.
+; A write cut short by a power loss or hard reset can leave NTFS with a
+; file's size committed and its data never flushed — right length, all
+; zeros. Field case: a demo's four bundled .glb models read back that way,
+; the viewer showed nothing, and re-running the bundle changed nothing
+; because the marker, the files and the version all looked current, so
+; UpgradeOrSkip answered "current - skipping". Same structural failure as
+; #1233, one level deeper: existence is not integrity.
+;
+; The check itself is probe-zero-filled.ps1 (extracted to $PLUGINSDIR in
+; .onInit): first and last 4 KiB of every file under the component's
+; install dir, the dir being the parent of its UninstallString. It
+; FAILS OPEN — no PowerShell, a script error, any exit other than 1 reads
+; as intact — so it can only ever add a repair, never block an install.
+;
+; Only for components that OWN their install dir (see DetectComponent's
+; ScanContent): the runtime and the shell share one, so a damaged shell
+; file would be blamed on the runtime, which would then be reinstalled on
+; every run without ever rewriting the shell file.
+;
+; Stack in:  ARP key name
+; Stack out: ""  nothing damaged (or the probe could not run)
+;            otherwise the first damaged file, relative to the install dir
+;--------------------------------
+Function ProbeContent
+    Exch $R5                 ; in: ARP key -> out: damaged file or ""
+    Push $R1
+    Push $R2
+    Push $R3
+
+    ReadRegStr $R1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\$R5" "UninstallString"
+    StrCpy $R5 ""
+    ${If} $R1 == ""
+        Goto pz_done
+    ${EndIf}
+    !insertmacro Unquote $R1 $R3
+    ${GetParent} "$R1" $R1
+
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\probe-zero-filled.ps1" -Dir "$R1"'
+    Pop $R2                  ; exit code ("error" if it could not launch)
+    Pop $R1                  ; stdout
+    ${If} $R2 != 1
+        Goto pz_done
+    ${EndIf}
+
+    ; Strip the trailing CR/LF PowerShell appends.
+  pz_trim:
+    StrCpy $R3 $R1 1 -1
+    ${If} $R3 == "$\n"
+    ${OrIf} $R3 == "$\r"
+        StrCpy $R1 $R1 -1
+        Goto pz_trim
+    ${EndIf}
+    StrCpy $R5 $R1
+    ${If} $R5 == ""
+        StrCpy $R5 "?"       ; damaged, name unknown — still a repair
+    ${EndIf}
+
+  pz_done:
+    Pop $R3
+    Pop $R2
+    Pop $R1
+    Exch $R5
+FunctionEnd
+
+;--------------------------------
 ; DetectComponent — ProbeComponent + the per-child bookkeeping .onInit did
 ; inline nine times over. Leaves the verdict in $0 so callers can keep
 ; driving SelectSection off "is there a marker" (`$0 != ""`), which is a
@@ -537,24 +606,41 @@ FunctionEnd
 ; also rewrites the ARP entry and restores the uninstaller, curing an entry
 ; that was unremovable while its uninstaller was missing.
 ;
+; ScanContent 1 also runs ProbeContent over an intact-looking component, and
+; reports a zero-filled file the same way as a missing one: not installed,
+; so it is reinstalled. 1 only for a component that owns its install dir.
+;
 ; Args: ArpKey (literal)  InstalledVar ($Var)  VerVar ($Var)  Human (literal)
+;       ScanContent (0|1)
 ;--------------------------------
-!macro DetectComponent ArpKey InstalledVar VerVar Human
+!macro DetectComponent ArpKey InstalledVar VerVar Human ScanContent
     Push "${ArpKey}"
     Call ProbeComponent
     Pop $0
+    StrCpy $1 "files missing"
+    !if ${ScanContent} == 1
+        ${If} $0 == "1"
+            Push "${ArpKey}"
+            Call ProbeContent
+            Pop $1
+            ${If} $1 != ""
+                StrCpy $0 "0"
+                StrCpy $1 "zero-filled: $1"
+            ${EndIf}
+        ${EndIf}
+    !endif
     ${If} $0 != ""
         ReadRegStr ${VerVar} HKLM \
             "Software\Microsoft\Windows\CurrentVersion\Uninstall\${ArpKey}" "DisplayVersion"
         ${If} $0 == "1"
             StrCpy ${InstalledVar} 1
         ${Else}
-            ; Marker without files. Drop the recorded version too: leaving it
+            ; Marker without (intact) files. Drop the recorded version too: leaving it
             ; set would send this through UpgradeOrSkip, which compares
             ; versions and would answer "current - skipping" over an empty dir.
             StrCpy ${InstalledVar} 0
             StrCpy ${VerVar} ""
-            StrCpy $G_RepairList "$G_RepairList${Human}, "
+            StrCpy $G_RepairList "$G_RepairList${Human} ($1), "
         ${EndIf}
     ${EndIf}
 !macroend
@@ -585,11 +671,11 @@ FunctionEnd
 ;--------------------------------
 Section "-StopDisplayXRProcesses"
     ; #1233: say out loud that this run is a repair, and for what. A
-    ; component listed here had an intact registry marker over missing
-    ; files, so it is being reinstalled rather than version-skipped.
+    ; component listed here had an intact registry marker over missing or
+    ; zero-filled files, so it is being reinstalled rather than version-skipped.
     ${If} $G_RepairList != ""
         StrCpy $0 $G_RepairList -2      ; drop the trailing ", "
-        DetailPrint "Repairing (registry entry present, files missing): $0"
+        DetailPrint "Repairing (registry entry present, files missing or damaged): $0"
     ${EndIf}
     ; runtime#2075: warn about foreign holders of the runtime DLL, but only
     ; when the runtime sub-installer is actually going to run.
@@ -1036,48 +1122,52 @@ Function .onInit
     StrCpy $G_AvatarVer        ""
     StrCpy $G_EarthViewVer     ""
 
+    ; ProbeContent's scanner, used by DetectComponent below.
+    InitPluginsDir
+    File "/oname=$PLUGINSDIR\probe-zero-filled.ps1" "${__FILEDIR__}\probe-zero-filled.ps1"
+
     ; Runtime is RO so its checkbox state can't be unset; still record
     ; install state to skip a redundant /S re-run.
-    !insertmacro DetectComponent "DisplayXR" $G_RuntimeInstalled $G_RuntimeVer "DisplayXR Runtime"
+    !insertmacro DetectComponent "DisplayXR" $G_RuntimeInstalled $G_RuntimeVer "DisplayXR Runtime" 0
 
     ; Shell — default-checked. Pre-checked when already installed too.
-    !insertmacro DetectComponent "DisplayXRShell" $G_ShellInstalled $G_ShellVer "DisplayXR Shell"
+    !insertmacro DetectComponent "DisplayXRShell" $G_ShellInstalled $G_ShellVer "DisplayXR Shell" 0
     ${If} $0 != ""
         !insertmacro SelectSection ${SecShell}
     ${EndIf}
 
     ; MCP — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXRMCP" $G_McpInstalled $G_McpVer "DisplayXR MCP Tools"
+    !insertmacro DetectComponent "DisplayXRMCP" $G_McpInstalled $G_McpVer "DisplayXR MCP Tools" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecMcp}
     ${EndIf}
 
     ; Gauss demo — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXRGaussianSplat" $G_GaussInstalled $G_GaussVer "Gaussian Splat viewer"
+    !insertmacro DetectComponent "DisplayXRGaussianSplat" $G_GaussInstalled $G_GaussVer "Gaussian Splat viewer" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecGauss}
     ${EndIf}
 
     ; Model viewer demo — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXRModelViewer" $G_ModelViewerInstalled $G_ModelViewerVer "3D Model Viewer"
+    !insertmacro DetectComponent "DisplayXRModelViewer" $G_ModelViewerInstalled $G_ModelViewerVer "3D Model Viewer" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecModelViewer}
     ${EndIf}
 
     ; Media player demo — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXRMediaPlayer" $G_MediaPlayerInstalled $G_MediaPlayerVer "Stereo Media Player"
+    !insertmacro DetectComponent "DisplayXRMediaPlayer" $G_MediaPlayerInstalled $G_MediaPlayerVer "Stereo Media Player" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecMediaPlayer}
     ${EndIf}
 
     ; Avatar demo — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXRAvatar" $G_AvatarInstalled $G_AvatarVer "3D Avatar"
+    !insertmacro DetectComponent "DisplayXRAvatar" $G_AvatarInstalled $G_AvatarVer "3D Avatar" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecAvatar}
     ${EndIf}
 
     ; EarthView demo — default-checked. Pre-checked when already installed.
-    !insertmacro DetectComponent "DisplayXREarthView" $G_EarthViewInstalled $G_EarthViewVer "EarthView"
+    !insertmacro DetectComponent "DisplayXREarthView" $G_EarthViewInstalled $G_EarthViewVer "EarthView" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecEarthView}
     ${EndIf}
@@ -1091,7 +1181,7 @@ Function .onInit
     ; order. Gating the default on a vendor path made a silent bundle on a
     ; box without the platform never install the plug-in at all, so
     ; installing the platform afterwards changed nothing.
-    !insertmacro DetectComponent "DisplayXRLeiaSR" $G_LeiaInstalled $G_LeiaVer "Leia SR plug-in"
+    !insertmacro DetectComponent "DisplayXRLeiaSR" $G_LeiaInstalled $G_LeiaVer "Leia SR plug-in" 1
     ${If} $0 != ""
         !insertmacro SelectSection ${SecLeia}
     ${EndIf}
