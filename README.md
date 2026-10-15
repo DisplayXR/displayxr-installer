@@ -45,6 +45,14 @@ cd DisplayXRBundle-*-linux-amd64
 sudo ./install.sh          # sudo ./uninstall.sh to remove
 ```
 
+To verify a download first, grab `SHA256SUMS` from the same release page into the same folder and run:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing   # checks only the assets you downloaded
+```
+
+`SHA256SUMS` covers every bundle asset (`.exe`, `.pkg`, `.tar.gz`, `.apk`); the `.exe` line matches the **signed** installer.
+
 It installs the DisplayXR runtime + Leia SR display-processor plug-in with **zero environment variables** — the runtime registers the OpenXR ActiveRuntime and searches `/usr/lib/displayxr/plugins` by default. Without the **Leia SR runtime** (the commercial `leiasr-runtime` package, shipped separately by Leia — **not** in this bundle) apps run on the built-in sim-display fallback; install it and the Leia display processor claims the display automatically. `install.sh` detects it and guides you.
 
 Demos are **not** included on Linux yet — they ship Windows `.exe` / macOS `.pkg` today but no Linux `.deb`. `build-bundle-linux.sh` already loops over them and will pull each one in automatically once its repo publishes a `*_amd64.deb` release asset (and `components.sh` gains its `DEB_LINUX` glob). Tracks [`DisplayXR/displayxr-runtime#781`](https://github.com/DisplayXR/displayxr-runtime/issues/781).
