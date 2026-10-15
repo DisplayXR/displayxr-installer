@@ -330,6 +330,18 @@ jobs:
           apks=(_out/DisplayXR-Installer-*.apk)
           android-installer/scripts/verify-release-signature.sh "${apks[0]}"
 
+      # One checksum file for every public asset, in `sha256sum` format with bare
+      # filenames, so a downloader can run `sha256sum -c SHA256SUMS --ignore-missing`
+      # (asked for by a tester; hand-added to v2.9.3 first). The .exe line is written
+      # here for the UNSIGNED CI exe — /installer-release (Phase 4.5) rewrites that line
+      # after it uploads the signed exe, or this file goes stale for the exe.
+      - name: Write SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd _out
+          sha256sum DisplayXRBundle-*.pkg DisplayXRBundle-*.exe DisplayXRBundle-*-linux-amd64.tar.gz DisplayXR-Installer-*.apk > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
@@ -351,6 +363,7 @@ jobs:
             _out/DisplayXRBundle-*.exe
             _out/DisplayXRBundle-*-linux-amd64.tar.gz
             _out/DisplayXR-Installer-*.apk
+            _out/SHA256SUMS
           fail_on_unmatched_files: true
 
       # ---------------------------------------------------------------------
