@@ -52,15 +52,6 @@ Rebooting after a display-service or head-tracking-service update **is not optio
 
 After the reboot, **unlock the tablet before opening any 3D app**. On the Nubia Pad 2 a USB-mode chooser may pop up; dismiss it.
 
-### Known issue: no head tracking after a reboot
-
-With the current display services, the head-tracking service can lock up shortly after the device starts. Apps then show 2D and do not follow your head, on every app, until the service is restarted. It does not happen on every boot. To fix it:
-
-1. **Settings → Apps →** show system apps **→ Head Tracking Service → Force stop.** (Do not force-stop DisplayXR itself.)
-2. Open your 3D app again. Tracking comes back within a couple of seconds.
-
-A fixed service is in progress and will ship in a later bundle.
-
 ## One-time settings after installing
 
 None of these are inside an APK, and each one fails in a way that looks like something else.
@@ -112,7 +103,7 @@ From a computer, `./scripts/audit-device.sh` in the bundle reads all three versi
 | See-through apps show a black background | Overlay permission missing | One-time setting 2. |
 | Browser shows no 3D, or loses it after a minute, but DisplayXR apps work | Background manager froze the runtime | Lock DisplayXR and DisplayXR Browser in Recents (one-time setting 3), then reload the page. |
 | Glass stays flat 2D although apps report 3D | Lens controller left in a bad state by a service update | Reboot. |
-| Apps are 2D and nothing follows your head, often right after a reboot | Head-tracking service locked up | Force-stop **Head Tracking Service** (Settings → Apps → show system apps), then reopen the app. See [Known issue](#known-issue-no-head-tracking-after-a-reboot). |
+| Apps are 2D and nothing follows your head | Head-tracking service not responding (fixed in display services 0.10.83; can still happen on older services) | Force-stop **Head Tracking Service** (Settings → Apps → show system apps), then reopen the app. |
 | 3D image stops following your head mid-session | Tracking camera was interrupted (another app, camera fault) | Wait about 15 to 35 seconds; the service and the app reconnect on their own. If it does not come back, force-stop Head Tracking Service and reopen the app. |
 | An app shows *"… has stopped … update the app in App Center or clear app data"* | Known first-launch dialog on some tablets | Tap the icon again; if it repeats, *Settings → Apps → that app → Storage → Clear data*. |
 | *"App not installed"* when installing the browser | Old browser signed with a different key | Uninstall the old browser first. |
@@ -121,6 +112,8 @@ From a computer, `./scripts/audit-device.sh` in the bundle reads all three versi
 
 ## What is new in this release
 
-- **Tracking recovers by itself after a camera interruption** (CNSDK 0.10.81). If the tracking camera is lost mid-session, the head-tracking service rebuilds its session with a short back-off, typically back within about 15 seconds. Before, tracking stayed lost until the service restarted. This does not cover the separate lock-up described under [Known issue](#known-issue-no-head-tracking-after-a-reboot).
-- **DisplayXR apps re-subscribe to tracking on their own** (Leia plug-in 2.15.10). If tracking frames stop mid-session, an app waits 30 seconds for the service to recover, then reconnects with back-off, and never gives up. Measured on a Nubia Pad 2: back within 34 seconds of the service being killed, without restarting the app.
-- **DisplayXR asks for the background exemption** on first launch and shows its state on the dashboard (runtime 2.45). On these tablets also lock DisplayXR and the browser in Recents; the exemption alone does not stop the freeze.
+- **Head tracking no longer locks up after a reboot** (display services 0.10.83). The head-tracking service could lock up within a minute of the device starting, leaving every app in 2D until the service was restarted. Fixed.
+- **No more double image after waking the device** (display services 0.10.83, Lume Pad 2 class panels). After a sleep and wake the panel could be left in a mode that turned every 3D app into a double image until the app was reopened. The display service now resets the panel correctly once it has woken; you may see a brief 2D flash right after unlocking.
+- **Tracking recovers by itself after a camera interruption.** If the tracking camera is lost mid-session (another app taking the front camera, a camera fault), the head-tracking service rebuilds its session with a short back-off, typically within about 15 seconds.
+- **DisplayXR apps re-subscribe to tracking on their own.** If tracking frames stop mid-session, an app waits 30 seconds for the service to recover, then reconnects with back-off, and never gives up.
+- **DisplayXR asks for the background exemption** on first launch and shows its state on the dashboard. On these tablets also lock DisplayXR and the browser in Recents; the exemption alone does not stop the freeze.
