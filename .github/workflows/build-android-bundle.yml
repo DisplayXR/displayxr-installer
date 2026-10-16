@@ -435,11 +435,11 @@ jobs:
           # 2026-10-15: CNSDK marker moved to 0.10.81+204.2e95902 (runtime CNSDK_TAG v0.10.81 —
           # CNSDK #754, the head-tracking service reopens a lost camera with back-off instead of
           # staying untracked; service-side only); cross-check 1 ties it to the APK stamp.
-          # 2026-10-16: CNSDK marker moved to 0.10.82+206.45ea1ae (runtime CNSDK_TAG v0.10.82 —
-          # CNSDK #755, head-tracking service deadlock fix; service-side only); cross-check 1 ties
-          # it to the APK stamp.
+          # 2026-10-16: CNSDK marker moved to 0.10.83+208.5d40493 (runtime CNSDK_TAG v0.10.83 —
+          # CNSDK #755 head-tracking service deadlock fix + #756 panel SPR wake guard; service-side
+          # only); cross-check 1 ties it to the APK stamp.
           printf '%s\n' \
-            'PLUGIN_EMBEDS cnsdk-android-0.10.82+206.45ea1ae' \
+            'PLUGIN_EMBEDS cnsdk-android-0.10.83+208.5d40493' \
             'PLUGIN_EMBEDS get_last_frame_dropped_cnsdk' \
             'PLUGIN_EMBEDS request_display_mode_cnsdk' \
             'PLUGIN_EMBEDS leia_cnsdk_set_display_mode_3d' \
