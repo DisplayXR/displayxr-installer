@@ -66,6 +66,7 @@ source "$REPO_ROOT/scripts/lib/fetch-components.sh"
 SHELL_TAG="$(jq -r '.shell' "$REPO_ROOT/versions.json")"
 LEIA_TAG="$(jq -r '.leia_plugin' "$REPO_ROOT/versions.json")"
 MCP_TAG="$(jq -r '.mcp_tools' "$REPO_ROOT/versions.json")"
+OPENCONV_TAG="$(jq -r '.conversion_open' "$REPO_ROOT/versions.json")"
 GAUSS_TAG="$(jq -r '.gauss_demo' "$REPO_ROOT/versions.json")"
 MODELVIEWER_TAG="$(jq -r '.modelviewer_demo' "$REPO_ROOT/versions.json")"
 MEDIAPLAYER_TAG="$(jq -r '.mediaplayer_demo' "$REPO_ROOT/versions.json")"
@@ -79,6 +80,7 @@ cat <<EOF
     shell:       $SHELL_TAG
     leia_plugin: $LEIA_TAG
     mcp_tools:   $MCP_TAG
+    conversion_open: $OPENCONV_TAG
     gauss_demo:  $GAUSS_TAG
     modelviewer: $MODELVIEWER_TAG
     mediaplayer: $MEDIAPLAYER_TAG
@@ -149,8 +151,8 @@ process_component() {
         earthview_demo)
             extract_earthview_demo "$expanded"
             ;;
-        shell|leia_plugin|mcp_tools)
-            # Future: shell/leia-plugin/mcp don't ship macOS .pkg today. When
+        shell|leia_plugin|mcp_tools|conversion_open)
+            # Future: shell/leia-plugin/mcp/open-conversion don't ship macOS .pkg today. When
             # they do, add extract_$name like extract_runtime — most
             # will look the same (one component .pkg inside, one
             # <choice>/<pkg-ref> pair).
@@ -309,6 +311,10 @@ process_component runtime     "$RUNTIME_TAG"
 process_component shell       "$SHELL_TAG"
 process_component leia_plugin "$LEIA_TAG"
 process_component mcp_tools   "$MCP_TAG"
+# Open-model conversion provider (ADR-053 P4): Windows .exe + Linux tarball
+# today, no macOS .pkg, so this skips until the runtime table grows a
+# PKG_MACOS glob for it.
+process_component conversion_open "$OPENCONV_TAG"
 # Demos go after core components in the install UI. All ship a macOS
 # .pkg (gauss, model viewer, media player, avatar). process_component gracefully
 # skips any whose runtime components.sh table has an empty PKG_MACOS glob,

@@ -93,6 +93,11 @@ set "COMPONENT_EXE_leia_plugin=DisplayXRLeiaSRSetup-*.exe"
 set "COMPONENT_REPO_mcp_tools=DisplayXR/displayxr-mcp"
 set "COMPONENT_EXE_mcp_tools=DisplayXRMCPSetup-*.exe"
 
+:: Open-model conversion provider (ADR-053 P4): registers
+:: HKLM\Software\DisplayXR\ConversionProviders\open-conversion.
+set "COMPONENT_REPO_conversion_open=DisplayXR/displayxr-conversion-open"
+set "COMPONENT_EXE_conversion_open=DisplayXROpenConversionSetup-*.exe"
+
 set "COMPONENT_REPO_gauss_demo=DisplayXR/displayxr-demo-gaussiansplat"
 set "COMPONENT_EXE_gauss_demo=DisplayXRGaussianSplatSetup-*.exe"
 
@@ -117,6 +122,7 @@ call :read_pin runtime     RUNTIME_TAG
 call :read_pin shell       SHELL_TAG
 call :read_pin leia_plugin LEIA_TAG
 call :read_pin mcp_tools   MCP_TAG
+call :read_pin conversion_open OPENCONV_TAG
 call :read_pin gauss_demo  GAUSS_TAG
 call :read_pin modelviewer_demo MODELVIEWER_TAG
 call :read_pin mediaplayer_demo MEDIAPLAYER_TAG
@@ -127,6 +133,7 @@ if "%RUNTIME_TAG%"=="" ( echo ERROR: versions.json missing 'runtime' pin & exit 
 if "%SHELL_TAG%"==""   ( echo ERROR: versions.json missing 'shell' pin & exit /b 1 )
 if "%LEIA_TAG%"==""    ( echo ERROR: versions.json missing 'leia_plugin' pin & exit /b 1 )
 if "%MCP_TAG%"==""     ( echo ERROR: versions.json missing 'mcp_tools' pin & exit /b 1 )
+if "%OPENCONV_TAG%"=="" ( echo ERROR: versions.json missing 'conversion_open' pin & exit /b 1 )
 if "%GAUSS_TAG%"==""   ( echo ERROR: versions.json missing 'gauss_demo' pin & exit /b 1 )
 if "%MODELVIEWER_TAG%"=="" ( echo ERROR: versions.json missing 'modelviewer_demo' pin & exit /b 1 )
 if "%MEDIAPLAYER_TAG%"=="" ( echo ERROR: versions.json missing 'mediaplayer_demo' pin & exit /b 1 )
@@ -142,6 +149,7 @@ set "RUNTIME_VER=%RUNTIME_TAG%"
 set "SHELL_VER=%SHELL_TAG%"
 set "LEIA_VER=%LEIA_TAG%"
 set "MCP_VER=%MCP_TAG%"
+set "OPENCONV_VER=%OPENCONV_TAG%"
 set "GAUSS_VER=%GAUSS_TAG%"
 set "MODELVIEWER_VER=%MODELVIEWER_TAG%"
 set "MEDIAPLAYER_VER=%MEDIAPLAYER_TAG%"
@@ -151,6 +159,7 @@ if /i "%RUNTIME_VER:~0,1%"=="v" set "RUNTIME_VER=%RUNTIME_VER:~1%"
 if /i "%SHELL_VER:~0,1%"=="v"   set "SHELL_VER=%SHELL_VER:~1%"
 if /i "%LEIA_VER:~0,1%"=="v"    set "LEIA_VER=%LEIA_VER:~1%"
 if /i "%MCP_VER:~0,1%"=="v"     set "MCP_VER=%MCP_VER:~1%"
+if /i "%OPENCONV_VER:~0,1%"=="v" set "OPENCONV_VER=%OPENCONV_VER:~1%"
 if /i "%GAUSS_VER:~0,1%"=="v"   set "GAUSS_VER=%GAUSS_VER:~1%"
 if /i "%MODELVIEWER_VER:~0,1%"=="v" set "MODELVIEWER_VER=%MODELVIEWER_VER:~1%"
 if /i "%MEDIAPLAYER_VER:~0,1%"=="v" set "MEDIAPLAYER_VER=%MEDIAPLAYER_VER:~1%"
@@ -163,6 +172,7 @@ echo     runtime:     %RUNTIME_TAG%
 echo     shell:       %SHELL_TAG%
 echo     leia_plugin: %LEIA_TAG%
 echo     mcp_tools:   %MCP_TAG%
+echo     conversion_open: %OPENCONV_TAG%
 echo     gauss_demo:  %GAUSS_TAG%
 echo     modelviewer: %MODELVIEWER_TAG%
 echo     mediaplayer: %MEDIAPLAYER_TAG%
@@ -174,6 +184,7 @@ call :download_component runtime     %RUNTIME_TAG% || exit /b 1
 call :download_component shell       %SHELL_TAG%   || exit /b 1
 call :download_component leia_plugin %LEIA_TAG%    || exit /b 1
 call :download_component mcp_tools   %MCP_TAG%     || exit /b 1
+call :download_component conversion_open %OPENCONV_TAG% || exit /b 1
 call :download_component gauss_demo  %GAUSS_TAG%   || exit /b 1
 call :download_component modelviewer_demo %MODELVIEWER_TAG% || exit /b 1
 call :download_component mediaplayer_demo %MEDIAPLAYER_TAG% || exit /b 1
@@ -185,6 +196,7 @@ call :find_exe runtime     RUNTIME_EXE_FILE || exit /b 1
 call :find_exe shell       SHELL_EXE_FILE   || exit /b 1
 call :find_exe leia_plugin LEIA_EXE_FILE    || exit /b 1
 call :find_exe mcp_tools   MCP_EXE_FILE     || exit /b 1
+call :find_exe conversion_open OPENCONV_EXE_FILE || exit /b 1
 call :find_exe gauss_demo  GAUSS_EXE_FILE   || exit /b 1
 call :find_exe modelviewer_demo MODELVIEWER_EXE_FILE || exit /b 1
 call :find_exe mediaplayer_demo MEDIAPLAYER_EXE_FILE || exit /b 1
@@ -198,6 +210,7 @@ copy /Y "%STAGE%\runtime\%RUNTIME_EXE_FILE%"        "%BUNDLE_STAGE%\" >nul || ex
 copy /Y "%STAGE%\shell\%SHELL_EXE_FILE%"            "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\leia_plugin\%LEIA_EXE_FILE%"       "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\mcp_tools\%MCP_EXE_FILE%"          "%BUNDLE_STAGE%\" >nul || exit /b 1
+copy /Y "%STAGE%\conversion_open\%OPENCONV_EXE_FILE%" "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\gauss_demo\%GAUSS_EXE_FILE%"       "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\modelviewer_demo\%MODELVIEWER_EXE_FILE%" "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\mediaplayer_demo\%MEDIAPLAYER_EXE_FILE%" "%BUNDLE_STAGE%\" >nul || exit /b 1
@@ -218,6 +231,7 @@ makensis ^
     "/DSHELL_EXE=%SHELL_EXE_FILE%" ^
     "/DLEIA_EXE=%LEIA_EXE_FILE%" ^
     "/DMCP_EXE=%MCP_EXE_FILE%" ^
+    "/DOPENCONV_EXE=%OPENCONV_EXE_FILE%" ^
     "/DGAUSS_EXE=%GAUSS_EXE_FILE%" ^
     "/DMODELVIEWER_EXE=%MODELVIEWER_EXE_FILE%" ^
     "/DMEDIAPLAYER_EXE=%MEDIAPLAYER_EXE_FILE%" ^
@@ -227,6 +241,7 @@ makensis ^
     "/DSHELL_VER=%SHELL_VER%" ^
     "/DLEIA_VER=%LEIA_VER%" ^
     "/DMCP_VER=%MCP_VER%" ^
+    "/DOPENCONV_VER=%OPENCONV_VER%" ^
     "/DGAUSS_VER=%GAUSS_VER%" ^
     "/DMODELVIEWER_VER=%MODELVIEWER_VER%" ^
     "/DMEDIAPLAYER_VER=%MEDIAPLAYER_VER%" ^
@@ -262,7 +277,7 @@ exit /b 0
 
 
 :download_component
-:: %1 = component name (runtime, shell, leia_plugin, mcp_tools)
+:: %1 = component name (runtime, shell, leia_plugin, mcp_tools, conversion_open, ...)
 :: %2 = tag (e.g. v1.4.2)
 set "_DC_NAME=%~1"
 set "_DC_TAG=%~2"
