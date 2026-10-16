@@ -4,7 +4,7 @@ Project guidance for Claude Code (claude.ai/code) when working in this repo.
 
 ## What this repo is
 
-`displayxr-installer` produces the **end-user meta-installer** for DisplayXR — one `.exe` / `.pkg` per OS that chains every component installer (runtime + Shell + Leia plug-in + MCP Tools) into a single guided flow.
+`displayxr-installer` produces the **end-user meta-installer** for DisplayXR — one `.exe` / `.pkg` per OS that chains every component installer (runtime + Shell + Leia plug-in + MCP Tools + Open Conversion provider + demos) into a single guided flow.
 
 Tracks issue [`DisplayXR/displayxr-runtime#284`](https://github.com/DisplayXR/displayxr-runtime/issues/284).
 

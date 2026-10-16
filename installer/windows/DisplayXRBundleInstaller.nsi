@@ -1,5 +1,6 @@
 ; DisplayXR end-user meta-installer (issue DisplayXR/displayxr-runtime#284)
-; Chains the Runtime + Shell + Leia plug-in + MCP Tools + Gaussian Splat,
+; Chains the Runtime + Shell + Leia plug-in + MCP Tools + Open Conversion
+; provider + Gaussian Splat,
 ; 3D Model Viewer, and Stereo Media Player demo installers in one guided
 ; flow. Each child is invoked silently
 ; (/S); the bundle itself takes the single UAC prompt + SmartScreen
@@ -19,6 +20,7 @@
 ;   SHELL_EXE        filename of staged shell installer
 ;   LEIA_EXE         filename of staged leia plug-in installer
 ;   MCP_EXE          filename of staged mcp tools installer
+;   OPENCONV_EXE     filename of staged open-conversion provider installer
 ;   GAUSS_EXE        filename of staged gaussian splat demo installer
 ;   MODELVIEWER_EXE  filename of staged 3D model viewer demo installer
 ;   MEDIAPLAYER_EXE  filename of staged stereo media player demo installer
@@ -41,6 +43,9 @@
 !endif
 !ifndef MCP_EXE
     !error "MCP_EXE not defined"
+!endif
+!ifndef OPENCONV_EXE
+    !error "OPENCONV_EXE not defined"
 !endif
 !ifndef GAUSS_EXE
     !error "GAUSS_EXE not defined"
@@ -70,6 +75,9 @@
 !endif
 !ifndef MCP_VER
     !error "MCP_VER not defined"
+!endif
+!ifndef OPENCONV_VER
+    !error "OPENCONV_VER not defined"
 !endif
 !ifndef GAUSS_VER
     !error "GAUSS_VER not defined"
@@ -154,6 +162,7 @@ Var G_RuntimeInstalled
 Var G_ShellInstalled
 Var G_LeiaInstalled
 Var G_McpInstalled
+Var G_OpenConvInstalled
 Var G_GaussInstalled
 Var G_ModelViewerInstalled
 Var G_MediaPlayerInstalled
@@ -184,6 +193,7 @@ Var G_RuntimeVer
 Var G_ShellVer
 Var G_LeiaVer
 Var G_McpVer
+Var G_OpenConvVer
 Var G_GaussVer
 Var G_ModelViewerVer
 Var G_MediaPlayerVer
@@ -872,6 +882,40 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
     SectionEnd
 SectionGroupEnd
 
+SectionGroup /e "Conversion providers" SecGrpConversion
+    ; Open-model 2D-to-3D conversion provider (ADR-053 P4). Same shape as the
+    ; vendor plug-in section: default-checked, pre-checked when installed, removed via
+    ; its own UninstallString. The child has no /NOSTART switch (it never
+    ; starts anything), so it is invoked with /S only.
+    Section "Open Conversion provider" SecOpenConv
+        !insertmacro SkipIfRuntimeFailed "Open Conversion provider"
+        SetOutPath "$INSTDIR"
+        ${If} ${SectionIsSelected} ${SecOpenConv}
+            ${If} $G_OpenConvInstalled == 0
+                DetailPrint "Installing Open Conversion provider..."
+                File "${BUNDLE_STAGE}\${OPENCONV_EXE}"
+                ClearErrors
+                StrCpy $G_ChildRan 1
+                ExecWait '"$INSTDIR\${OPENCONV_EXE}" /S' $0
+                ${If} $0 != 0
+                    !insertmacro ChildFailed "Open Conversion provider" $0 0
+                ${EndIf}
+                Delete "$INSTDIR\${OPENCONV_EXE}"
+            ${Else}
+                !insertmacro UpgradeOrSkip $G_OpenConvVer "${OPENCONV_VER}" "${OPENCONV_EXE}" "Open Conversion provider" "" 0
+            ${EndIf}
+        ${ElseIf} $G_OpenConvInstalled == 1
+            DetailPrint "Removing Open Conversion provider..."
+            ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXROpenConversion" "UninstallString"
+            ${If} $1 != ""
+                StrCpy $G_ChildRan 1
+                ExecWait '$1 /S' $0
+                !insertmacro ChildRemoved "Open Conversion provider" $0
+            ${EndIf}
+        ${EndIf}
+    SectionEnd
+SectionGroupEnd
+
 SectionGroup /e "Demos & samples" SecGrpDemos
     Section "Gaussian Splat viewer" SecGauss
         !insertmacro SkipIfRuntimeFailed "Gaussian Splat viewer"
@@ -1160,6 +1204,7 @@ Function .onInit
     StrCpy $G_ShellInstalled   0
     StrCpy $G_LeiaInstalled    0
     StrCpy $G_McpInstalled     0
+    StrCpy $G_OpenConvInstalled 0
     StrCpy $G_GaussInstalled   0
     StrCpy $G_ModelViewerInstalled 0
     StrCpy $G_MediaPlayerInstalled 0
@@ -1173,6 +1218,7 @@ Function .onInit
     StrCpy $G_ShellVer         ""
     StrCpy $G_LeiaVer          ""
     StrCpy $G_McpVer           ""
+    StrCpy $G_OpenConvVer      ""
     StrCpy $G_GaussVer         ""
     StrCpy $G_ModelViewerVer   ""
     StrCpy $G_MediaPlayerVer   ""
@@ -1191,6 +1237,7 @@ Function .onInit
     !insertmacro ProbeAdd "DisplayXRAvatar"
     !insertmacro ProbeAdd "DisplayXREarthView"
     !insertmacro ProbeAdd "DisplayXRLeiaSR"
+    !insertmacro ProbeAdd "DisplayXROpenConversion"
     Call ProbeContentAll
 
     ; Runtime is RO so its checkbox state can't be unset; still record
@@ -1252,6 +1299,14 @@ Function .onInit
     ${If} $0 != ""
         !insertmacro SelectSection ${SecLeia}
     ${EndIf}
+
+    ; Open-model conversion provider — default-checked like every other
+    ; component, pre-checked when already installed. Inert until a client
+    ; asks for a 2D-to-3D task; the model downloads on first use.
+    !insertmacro DetectComponent "DisplayXROpenConversion" $G_OpenConvInstalled $G_OpenConvVer "Open Conversion provider" 1
+    ${If} $0 != ""
+        !insertmacro SelectSection ${SecOpenConv}
+    ${EndIf}
 FunctionEnd
 
 Function un.onInit
@@ -1266,6 +1321,7 @@ FunctionEnd
 LangString DESC_SecRuntime ${LANG_ENGLISH} "Core OpenXR runtime, service, and native compositors. Required by every other component."
 LangString DESC_SecShell   ${LANG_ENGLISH} "Spatial workspace + window manager for 3D apps. Multi-app layouts, chrome, file picker."
 LangString DESC_SecMcp     ${LANG_ENGLISH} "Claude / AI control adapter for DisplayXR. Required for the displayxr-mcp Tools experience."
+LangString DESC_SecOpenConv ${LANG_ENGLISH} "Open-model 2D-to-3D conversion provider: depth from images and video on ONNX Runtime/DirectML, for displays without a vendor conversion module. Models download on first use."
 LangString DESC_SecLeia    ${LANG_ENGLISH} "Display processor plug-in for Leia SR 3D monitors. Safe to install on any PC: it stays inactive until the monitor's own platform software is installed (before or after DisplayXR)."
 LangString DESC_SecGauss   ${LANG_ENGLISH} "Sample 3D scene viewer (Gaussian splatting renderer). Standalone DisplayXR app."
 LangString DESC_SecModelViewer ${LANG_ENGLISH} "glTF 2.0 PBR model viewer (.glb/.gltf). Standalone DisplayXR app."
@@ -1278,6 +1334,7 @@ LangString DESC_SecEarthView ${LANG_ENGLISH} "Streaming 3D city viewer on Google
     !insertmacro MUI_DESCRIPTION_TEXT ${SecShell}   $(DESC_SecShell)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecMcp}     $(DESC_SecMcp)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecLeia}    $(DESC_SecLeia)
+    !insertmacro MUI_DESCRIPTION_TEXT ${SecOpenConv} $(DESC_SecOpenConv)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecGauss}   $(DESC_SecGauss)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecModelViewer} $(DESC_SecModelViewer)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecMediaPlayer} $(DESC_SecMediaPlayer)
@@ -1301,7 +1358,7 @@ LangString DESC_SecEarthView ${LANG_ENGLISH} "Streaming 3D city viewer on Google
 ; bundle must not rely on it to remove a plug-in.
 ;
 ; Walk each child's UninstallString in reverse install order
-; (EarthView → Avatar → MediaPlayer → ModelViewer → Gauss → MCP → Leia SR → Shell → Runtime). Runtime last so its
+; (EarthView → Avatar → MediaPlayer → ModelViewer → Gauss → Open Conversion → MCP → Leia SR → Shell → Runtime). Runtime last so its
 ; DeleteRegKey /ifempty Software\DisplayXR cleanup catches any orphan
 ; subkeys (per PR DisplayXR/displayxr-runtime#291 fix #4). The chain
 ; gracefully skips any child whose ARP key is absent — covers
@@ -1351,6 +1408,15 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRGaussianSplat" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling Gaussian Splat viewer..."
+        ExecWait '$ChildUninstall /S' $0
+        DetailPrint "  exit code: $0"
+    ${EndIf}
+
+    ; -- Open Conversion provider --
+    ClearErrors
+    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXROpenConversion" "UninstallString"
+    ${If} $ChildUninstall != ""
+        DetailPrint "Uninstalling Open Conversion provider..."
         ExecWait '$ChildUninstall /S' $0
         DetailPrint "  exit code: $0"
     ${EndIf}

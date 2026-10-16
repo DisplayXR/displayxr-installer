@@ -1,6 +1,6 @@
 # displayxr-installer
 
-End-user meta-installer for [DisplayXR](https://github.com/DisplayXR/displayxr-runtime) — a single `.exe` / `.pkg` bundle that chains the OpenXR runtime, Shell, Leia SR plug-in, and MCP Tools into one guided install.
+End-user meta-installer for [DisplayXR](https://github.com/DisplayXR/displayxr-runtime) — a single `.exe` / `.pkg` bundle that chains the OpenXR runtime, Shell, Leia SR plug-in, MCP Tools, and the open-model conversion provider into one guided install.
 
 Tracks issue [`DisplayXR/displayxr-runtime#284`](https://github.com/DisplayXR/displayxr-runtime/issues/284).
 
@@ -29,6 +29,7 @@ Version 1 of the bundle ships unsigned. SmartScreen / Gatekeeper show a one-time
 | DisplayXR Shell | — (Windows-only today) | ✅ | — |
 | Leia SR Plug-in | — (Windows-only, vendor SDK) | ✅ | ✅ |
 | MCP Tools | — (Windows-only today) | ✅ | — |
+| Open Conversion provider (open-model 2D→3D) | — (no macOS build today) | ✅ | ⏳ ships a per-user tarball, not a `.deb` |
 | Demos (gauss, model viewer, media player, avatar, earthview) | ✅ | ✅ | ⏳ join when they ship a Linux `.deb` |
 
 macOS users get a runtime-only install today; additional components join the bundle as they publish `.pkg` artifacts.
