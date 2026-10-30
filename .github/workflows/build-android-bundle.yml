@@ -441,8 +441,11 @@ jobs:
           # 2026-10-26: CNSDK marker moved to 0.10.85+210.7647837 (runtime CNSDK_TAG v0.10.85 —
           # CNSDK #758 head-tracking stall recovery + #757 override camera pose); cross-check 1
           # ties it to the APK stamp.
+          # 2026-10-30: CNSDK marker moved to 0.10.87+211.ec09441 (runtime CNSDK_TAG v0.10.87 —
+          # CNSDK #761 lens command spacing + #759 lls_gyro predictor); cross-check 1 ties it to
+          # the APK stamp.
           printf '%s\n' \
-            'PLUGIN_EMBEDS cnsdk-android-0.10.85+210.7647837' \
+            'PLUGIN_EMBEDS cnsdk-android-0.10.87+211.ec09441' \
             'PLUGIN_EMBEDS get_last_frame_dropped_cnsdk' \
             'PLUGIN_EMBEDS request_display_mode_cnsdk' \
             'PLUGIN_EMBEDS leia_cnsdk_set_display_mode_3d' \
