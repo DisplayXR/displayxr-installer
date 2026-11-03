@@ -38,6 +38,19 @@ on:
         description: "Tag for that release (default: android-bundle-<UTC date>)"
         type: string
         default: ""
+  # publish-bundle.yml calls this so every desktop vX release also carries the Android
+  # zip (as DisplayXRBundle-<ver>-android-arm64.zip). It attaches the zip itself; this
+  # workflow only builds and uploads the CI artifact.
+  workflow_call:
+    inputs:
+      skip_installer_artifact:
+        description: "Do not upload the standalone installer APK artifact (the caller builds its own)"
+        type: boolean
+        default: false
+    outputs:
+      artifact:
+        description: "Name of the uploaded artifact holding the bundle zip + .sha256"
+        value: ${{ jobs.bundle.outputs.artifact }}
 
 permissions:
   contents: write   # only exercised by the final, opt-in publish step
@@ -45,6 +58,8 @@ permissions:
 jobs:
   bundle:
     runs-on: ubuntu-latest
+    outputs:
+      artifact: ${{ steps.bundle_name.outputs.name }}
     # The installer app's signing key (build-android-installer.yml, "SIGNING"): reachable
     # from main only. From any other branch the installer is debug-signed, and publish=true
     # then fails at the installer step instead of shipping an APK tablets cannot update to.
@@ -134,6 +149,10 @@ jobs:
           RT=$(pin runtime)
           echo "RUNTIME_VER=${RT#v}" >> "$GITHUB_ENV"
           echo "BUNDLE=displayxr-tablet-bundle-$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
+
+      - name: Expose the bundle name
+        id: bundle_name
+        run: echo "name=$BUNDLE" >> "$GITHUB_OUTPUT"
 
       - name: Download the vendor display services (private repo)
         env:
@@ -651,8 +670,11 @@ jobs:
           compression-level: 0   # already a zip; recompressing ~500 MB buys nothing
 
       # The installer on its own, as a convenience artifact. It is public anyway (every
-      # bundle release attaches the same build), so nothing here restricts it.
-      - uses: actions/upload-artifact@v4
+      # bundle release attaches the same build), so nothing here restricts it. Skipped when
+      # publish-bundle.yml calls us: it builds its own installer artifact, and a second
+      # DisplayXR-Installer-*.apk in its download would trip its "exactly one" gate.
+      - if: ${{ !inputs.skip_installer_artifact }}
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.INSTALLER_APK }}
           path: |

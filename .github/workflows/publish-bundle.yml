@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write   # release job needs it; drift-guard only reads
+  actions: write    # release job re-points android-bundle-latest (workflow_dispatch)
 
 jobs:
   # Belt-and-braces drift guard: versions.json in this repo is mirrored
@@ -284,8 +285,20 @@ jobs:
     with:
       require_release_key: true
 
+  # The Android tablet bundle (offline adb/sideload zip), built from the SAME versions.json
+  # pins as the desktop installers, so one vX release carries every platform. It contains the
+  # vendor display-service APKs, exactly like the android-bundle-* releases already published
+  # from this public repo. Artifact-verified by its harness, NOT hardware-verified.
+  build-android-bundle:
+    needs: assert-versions-in-sync
+    uses: ./.github/workflows/build-android-bundle.yml
+    # LEIALOFT_GITHUB_TOKEN (private services) + the installer signing key it embeds.
+    secrets: inherit
+    with:
+      skip_installer_artifact: true
+
   release:
-    needs: [build-macos, build-windows, build-linux, build-android-installer]
+    needs: [build-macos, build-windows, build-linux, build-android-installer, build-android-bundle]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -330,6 +343,22 @@ jobs:
           apks=(_out/DisplayXR-Installer-*.apk)
           android-installer/scripts/verify-release-signature.sh "${apks[0]}"
 
+      # Give the Android zip its platform name next to its siblings. Its own .sha256 names
+      # the dated file, so check it first, then drop it: SHA256SUMS below covers the zip.
+      - name: Name the Android bundle
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd _out
+          zips=(displayxr-tablet-bundle-*.zip)
+          [ "${#zips[@]}" -eq 1 ] || { echo "::error::expected exactly one displayxr-tablet-bundle-*.zip, found ${#zips[@]}"; exit 1; }
+          sha256sum -c "${zips[0]}.sha256"
+          mv "${zips[0]}" "DisplayXRBundle-${TAG#v}-android-arm64.zip"
+          rm -f "${zips[0]}.sha256"
+          ls -lh DisplayXRBundle-*-android-arm64.zip
+
       # One checksum file for every public asset, in `sha256sum` format with bare
       # filenames, so a downloader can run `sha256sum -c SHA256SUMS --ignore-missing`
       # (asked for by a tester; hand-added to v2.9.3 first). The .exe line is written
@@ -339,7 +368,7 @@ jobs:
         run: |
           set -euo pipefail
           cd _out
-          sha256sum DisplayXRBundle-*.pkg DisplayXRBundle-*.exe DisplayXRBundle-*-linux-amd64.tar.gz DisplayXR-Installer-*.apk > SHA256SUMS
+          sha256sum DisplayXRBundle-*.pkg DisplayXRBundle-*.exe DisplayXRBundle-*-linux-amd64.tar.gz DisplayXRBundle-*-android-arm64.zip DisplayXR-Installer-*.apk > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create release
@@ -362,9 +391,20 @@ jobs:
             _out/DisplayXRBundle-*.pkg
             _out/DisplayXRBundle-*.exe
             _out/DisplayXRBundle-*-linux-amd64.tar.gz
+            _out/DisplayXRBundle-*-android-arm64.zip
             _out/DisplayXR-Installer-*.apk
             _out/SHA256SUMS
           fail_on_unmatched_files: true
+
+      # Keep the stable android-bundle-latest link on the newest zip. A release created with
+      # GITHUB_TOKEN fires no `release: published` event, so dispatch the pointer explicitly.
+      # Prereleases leave it alone.
+      - name: Re-point android-bundle-latest
+        if: ${{ !inputs.prerelease }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh workflow run android-bundle-latest.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f tag="$TAG"
 
       # ---------------------------------------------------------------------
       # THIS WORKFLOW CANNOT SIGN. The EV cert lives on the signing provider's
