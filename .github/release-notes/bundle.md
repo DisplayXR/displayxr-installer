@@ -22,4 +22,6 @@ If the installer shows a red **"Display services update needed"** card, it could
 
 **Already have DisplayXR Installer 0.4.1 or older? One time only:** uninstall the old **DisplayXR Installer** (*Settings → Apps → DisplayXR Installer → Uninstall*), then install this one — otherwise Android says *"App not installed"*. Your DisplayXR apps are not affected. Those older builds were signed with a temporary key; from 0.4.2 on every installer is signed with the same permanent key and updates in place.
 
+**Installing from a computer instead (adb, offline)?** Download **`DisplayXRBundle-<version>-android-arm64.zip`** from the *Assets* list, unzip it and follow `INSTALL.md` inside: it holds every APK (display services, runtime, demos, browser) from the same pins as this release. The newest one is always at [`displayxr-tablet-bundle.zip`](https://github.com/DisplayXR/displayxr-installer/releases/download/android-bundle-latest/displayxr-tablet-bundle.zip).
+
 ---

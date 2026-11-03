@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Published android-bundle-* release to point android-bundle-latest at"
+        description: "Published android-bundle-* or vX.Y.Z release to point android-bundle-latest at"
         required: true
       force:
         description: "Point at it even if it is older than the current target"
@@ -61,14 +61,15 @@ jobs:
           case "$SRC_TAG" in
             android-bundle-latest) echo "::error::refusing to point $POINTER at itself"; exit 1 ;;
             android-bundle-*) ;;
-            *) echo "::error::$SRC_TAG is not an android-bundle-* release"; exit 1 ;;
+            v[0-9]*) ;;   # desktop bundle release carrying DisplayXRBundle-<ver>-android-arm64.zip
+            *) echo "::error::$SRC_TAG is neither an android-bundle-* nor a vX.Y.Z release"; exit 1 ;;
           esac
 
           src=$(gh release view "$SRC_TAG" --json isDraft,publishedAt,url,assets)
           [ "$(jq -r .isDraft <<<"$src")" = false ] || { echo "::error::$SRC_TAG is still a draft"; exit 1; }
           SRC_AT=$(jq -r .publishedAt <<<"$src")
           SRC_URL=$(jq -r .url <<<"$src")
-          ZIP=$(jq -r '[.assets[].name | select(endswith(".zip"))] | first // empty' <<<"$src")
+          ZIP=$(jq -r '[.assets[].name | select(endswith("-android-arm64.zip") or startswith("displayxr-tablet-bundle-"))] | map(select(endswith(".zip"))) | first // empty' <<<"$src")
           [ -n "$ZIP" ] || { echo "::error::$SRC_TAG has no .zip asset"; exit 1; }
 
           # Never move backwards (ISO-8601 UTC timestamps compare lexically).
@@ -107,7 +108,7 @@ jobs:
           Stable download (always the newest bundle):
           \`https://github.com/$GH_REPO/releases/download/$POINTER/$STABLE\`
 
-          \`$ZIP\` is the same bytes under its dated name. Moved automatically by \`android-bundle-latest.yml\` whenever an \`android-bundle-*\` release is published. This is not the repo's "Latest" release — that stays the desktop installer.
+          \`$ZIP\` is the same bytes under its dated name. Moved automatically by \`android-bundle-latest.yml\` whenever an \`android-bundle-*\` or desktop \`vX.Y.Z\` bundle release is published. This is not the repo's "Latest" release — that stays the desktop installer.
 
           <!-- source-tag: $SRC_TAG -->
           <!-- source-published-at: $SRC_AT -->
