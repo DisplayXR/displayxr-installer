@@ -406,6 +406,40 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: gh workflow run android-bundle-latest.yml -R "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f tag="$TAG"
 
+      # Nudge displayxr.org to re-pull org data. The site reads the bundle version
+      # from this repo's latest release, but only re-syncs on its daily cron or on an
+      # `org-changed` dispatch — and only component releases sent one (runtime's
+      # versions-bump.yml). So /download kept showing the previous bundle for up to a
+      # day after every bundle release (v2.9.29, 2026-11-07). Same event, same
+      # publish-bot App, same non-fatal posture as versions-bump.yml: a website
+      # hiccup must never fail a bundle release. Prereleases are not "latest", so
+      # the site would not change for them.
+      - name: Mint App token for the website dispatch
+        id: app-token
+        if: ${{ !inputs.prerelease }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.DISPLAYXR_APP_ID }}
+          private-key: ${{ secrets.DISPLAYXR_APP_PRIVATE_KEY }}
+          owner: DisplayXR
+          repositories: displayxr-website
+
+      - name: Notify website to resync
+        if: ${{ !inputs.prerelease && steps.app-token.outputs.token != '' }}
+        continue-on-error: true
+        uses: peter-evans/repository-dispatch@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          repository: DisplayXR/displayxr-website
+          event-type: org-changed
+          client-payload: |
+            {
+              "field":       "installer",
+              "tag":         "${{ inputs.tag }}",
+              "source_repo": "DisplayXR/displayxr-installer"
+            }
+
       # ---------------------------------------------------------------------
       # THIS WORKFLOW CANNOT SIGN. The EV cert lives on the signing provider's
       # self-hosted runner ($DXR_SIGN_REPO), so the bundle .exe is signed
