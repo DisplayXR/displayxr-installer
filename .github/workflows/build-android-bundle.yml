@@ -466,8 +466,11 @@ jobs:
           # 2026-11-02: CNSDK marker moved to 0.10.95+217.ec01903 (runtime CNSDK_TAG v0.10.95 —
           # CNSDK #763/#766/#768/#769/#770, leia-plugin v2.19.7); cross-check 1 ties it to the
           # APK stamp.
+          # 2026-11-09: CNSDK marker moved to 0.10.98+218.2a71434 (runtime CNSDK_TAG v0.10.98 —
+          # CNSDK #775 shared-camera throttle no longer sleeps the producer, runtime #2575);
+          # cross-check 1 ties it to the APK stamp.
           printf '%s\n' \
-            'PLUGIN_EMBEDS cnsdk-android-0.10.95+217.ec01903' \
+            'PLUGIN_EMBEDS cnsdk-android-0.10.98+218.2a71434' \
             'PLUGIN_EMBEDS get_last_frame_dropped_cnsdk' \
             'PLUGIN_EMBEDS request_display_mode_cnsdk' \
             'PLUGIN_EMBEDS leia_cnsdk_set_display_mode_3d' \
