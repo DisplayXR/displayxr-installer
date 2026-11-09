@@ -261,11 +261,16 @@ Var G_EarthViewVer
 ;--------------------------------
 !define BUNDLE_LOG_FILE      "${BUNDLE_CACHE_DIR}\install.log"
 !define BUNDLE_LOG_PREV_FILE "${BUNDLE_CACHE_DIR}\install.prev.log"
-!define LVM_GETITEMCOUNT 0x1004
-!if ${NSIS_CHAR_SIZE} > 1
-    !define LVM_GETITEMTEXT 0x1073   ; LVM_GETITEMTEXTW
-!else
-    !define LVM_GETITEMTEXT 0x102D   ; LVM_GETITEMTEXTA
+; WinMessages.nsh (pulled in by MUI2) normally defines both; guard in case.
+!ifndef LVM_GETITEMCOUNT
+    !define LVM_GETITEMCOUNT 0x1004
+!endif
+!ifndef LVM_GETITEMTEXT
+    !if ${NSIS_CHAR_SIZE} > 1
+        !define LVM_GETITEMTEXT 0x1073   ; LVM_GETITEMTEXTW
+    !else
+        !define LVM_GETITEMTEXT 0x102D   ; LVM_GETITEMTEXTA
+    !endif
 !endif
 
 Function WriteInstallLog
