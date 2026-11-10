@@ -243,6 +243,108 @@ Var G_EarthViewVer
 !macroend
 
 ;--------------------------------
+; WriteInstallLog — save the install details to ${BUNDLE_LOG_FILE}.
+;
+; The bundle used to leave nothing on disk: its DetailPrint lines lived only
+; in the details list of the install window, so once the user closed it a
+; "the install felt broken" report could only be reconstructed from source.
+; This copies that list to a file (the NSIS-wiki DumpLog technique — read the
+; instfiles page's list view, control 1016, item by item), keeping the
+; previous run's log beside it as install.prev.log.
+;
+; A silent (/S) run has no window and so no list; it writes the header and a
+; one-line outcome summary instead. Child installers run /S, so their own
+; details were never in the list — the summary lines here (failures, blockers)
+; are what the bundle learned from their exit codes.
+;
+; Best-effort: any failure leaves the install unaffected.
+;--------------------------------
+!define BUNDLE_LOG_FILE      "${BUNDLE_CACHE_DIR}\install.log"
+!define BUNDLE_LOG_PREV_FILE "${BUNDLE_CACHE_DIR}\install.prev.log"
+; WinMessages.nsh (pulled in by MUI2) normally defines both; guard in case.
+!ifndef LVM_GETITEMCOUNT
+    !define LVM_GETITEMCOUNT 0x1004
+!endif
+!ifndef LVM_GETITEMTEXT
+    !if ${NSIS_CHAR_SIZE} > 1
+        !define LVM_GETITEMTEXT 0x1073   ; LVM_GETITEMTEXTW
+    !else
+        !define LVM_GETITEMTEXT 0x102D   ; LVM_GETITEMTEXTA
+    !endif
+!endif
+
+Function WriteInstallLog
+    Exch $R0                 ; in: outcome word ("completed" / "aborted")
+    Push $0
+    Push $1
+    Push $2
+    Push $3
+    Push $4
+    Push $5
+    Push $6
+    Push $R1
+
+    CreateDirectory "${BUNDLE_CACHE_DIR}"
+    Delete "${BUNDLE_LOG_PREV_FILE}"
+    Rename "${BUNDLE_LOG_FILE}" "${BUNDLE_LOG_PREV_FILE}"
+
+    ClearErrors
+    FileOpen $5 "${BUNDLE_LOG_FILE}" w
+    IfErrors wil_exit
+
+    ${GetTime} "" "L" $0 $1 $2 $3 $4 $6 $R1
+    FileWrite $5 "DisplayXR bundle ${BUNDLE_VERSION} - $2-$1-$0 $4:$6:$R1 - $R0$\r$\n"
+    FileWrite $5 "Installer: $EXEPATH$\r$\n"
+    ${If} $G_ChildFailures != ""
+        FileWrite $5 "Components that did not install cleanly: $G_ChildFailures$\r$\n"
+    ${EndIf}
+    FileWrite $5 "$\r$\n"
+
+    ; The details list, if there is a window to read it from. Check silence
+    ; first: under /S $HWNDPARENT is 0, and FindWindow with a null parent
+    ; would search every top-level dialog on the desktop.
+    StrCpy $0 0
+    ${IfNot} ${Silent}
+    ${AndIf} $HWNDPARENT != 0
+        FindWindow $0 "#32770" "" $HWNDPARENT
+        GetDlgItem $0 $0 1016
+    ${EndIf}
+    ${If} $0 == 0
+        FileWrite $5 "(silent run: no details window to copy)$\r$\n"
+        Goto wil_close
+    ${EndIf}
+
+    SendMessage $0 ${LVM_GETITEMCOUNT} 0 0 $6
+    System::Call '*(&t${NSIS_MAX_STRLEN})p.r3'
+    System::Call '*(i, i, i, i, i, p, i, i, i) p (0, 0, 0, 0, 0, r3, ${NSIS_MAX_STRLEN}) .r1'
+    StrCpy $2 0
+  wil_loop:
+    StrCmp $2 $6 wil_free
+    System::Call 'User32::SendMessage(p, i, p, p) p ($0, ${LVM_GETITEMTEXT}, $2, r1)'
+    System::Call '*$3(&t${NSIS_MAX_STRLEN} .r4)'
+    FileWrite $5 "$4$\r$\n"
+    IntOp $2 $2 + 1
+    Goto wil_loop
+  wil_free:
+    System::Free $1
+    System::Free $3
+
+  wil_close:
+    FileClose $5
+
+  wil_exit:
+    Pop $R1
+    Pop $6
+    Pop $5
+    Pop $4
+    Pop $3
+    Pop $2
+    Pop $1
+    Pop $0
+    Pop $R0
+FunctionEnd
+
+;--------------------------------
 ; ChildFailed -- record a failed child installer and keep going.
 ;
 ; Never a bare modal: every MessageBox carries /SD so a silent (/S) bundle
@@ -405,7 +507,12 @@ FunctionEnd
 ;
 ; The service and shell are stopped by -StopDisplayXRProcesses, and the
 ; runtime installer ends browsers' WebXR utility processes itself, so those
-; are left out. Anything else (a Unity editor, a customer app, the DisplayXR
+; are left out. So are the service's two satellites, displayxr-conversion-host
+; (ADR-053) and displayxr-tracking-host: both map DisplayXRClient.dll, both
+; die with the service's job object, and the runtime installer taskkills any
+; straggler (CloseRuntimeClients). Listing them was a false alarm the user
+; could only Ignore — Retry never cleared it, because the running service
+; respawns the conversion host to describe its providers. Anything else (a Unity editor, a customer app, the DisplayXR
 ; Browser's own window) blocks the runtime update. Saying so before anything
 ; runs beats a code-6 stop halfway through the chain.
 ;
@@ -431,7 +538,7 @@ Function RuntimeHolderPreflight
 
   rhp_scan:
     ; `$$` is a literal '$' for PowerShell.
-    nsExec::ExecToStack `"$3" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference='SilentlyContinue'; $$d=Join-Path '$1' 'DisplayXRClient.dll'; $$cl=@{}; Get-CimInstance Win32_Process | ForEach-Object { $$cl[[int]$$_.ProcessId]=[string]$$_.CommandLine }; Get-Process | Where-Object { $$_.Id -ne $$PID -and $$_.Name -notmatch '^displayxr-(service|shell)$$' -and -not ([string]$$cl[$$_.Id]).Contains('XRDeviceService') -and ($$_.Modules | Where-Object { $$_.FileName -eq $$d }) } | ForEach-Object { '  - ' + $$_.Name + ' (PID ' + $$_.Id + ')' }"`
+    nsExec::ExecToStack `"$3" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ErrorActionPreference='SilentlyContinue'; $$d=Join-Path '$1' 'DisplayXRClient.dll'; $$cl=@{}; Get-CimInstance Win32_Process | ForEach-Object { $$cl[[int]$$_.ProcessId]=[string]$$_.CommandLine }; Get-Process | Where-Object { $$_.Id -ne $$PID -and $$_.Name -notmatch '^displayxr-(service|shell|conversion-host|tracking-host)$$' -and -not ([string]$$cl[$$_.Id]).Contains('XRDeviceService') -and ($$_.Modules | Where-Object { $$_.FileName -eq $$d }) } | ForEach-Object { '  - ' + $$_.Name + ' (PID ' + $$_.Id + ')' }"`
     Pop $0   ; exit code
     Pop $2   ; holder lines
     StrCmp $2 "" rhp_done
@@ -1183,7 +1290,19 @@ Section "-FinalizeBundleArp"
     ${ElseIf} $G_ChildFailures != ""
         SetErrorLevel 3
     ${EndIf}
+
+    ; Last, so the file holds every line above it.
+    DetailPrint "Install log: ${BUNDLE_LOG_FILE}"
+    Push "completed"
+    Call WriteInstallLog
 SectionEnd
+
+; An Abort (the preflight's Abort button) skips -FinalizeBundleArp; keep the
+; log for that run too.
+Function .onInstFailed
+    Push "aborted"
+    Call WriteInstallLog
+FunctionEnd
 
 ;--------------------------------
 ; .onInit — SetRegView 64 (so HKLM\Software\... isn't redirected to
@@ -1503,6 +1622,9 @@ Section "Uninstall"
     ; .exe and its now-empty dir for removal on next boot. The ARP key is
     ; already gone above, so the lingering .exe is inert either way.
     Delete /REBOOTOK "${BUNDLE_UNINST_FILE}"
+    ; The install logs would otherwise keep the RMDir below from succeeding.
+    Delete "${BUNDLE_LOG_FILE}"
+    Delete "${BUNDLE_LOG_PREV_FILE}"
     RMDir /REBOOTOK "${BUNDLE_CACHE_DIR}"
     RMDir /REBOOTOK "$APPDATA\DisplayXR"
 
