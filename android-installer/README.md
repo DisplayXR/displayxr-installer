@@ -122,8 +122,10 @@ published beside the APKs — the publisher refuses to publish without them — 
 ### Publishing the display services
 
 `.github/workflows/publish-cnsdk-services.yml` (workflow_dispatch with an optional tag; also runs on
-every push to `main` that touches `versions.json`, and exits in seconds when the host already serves
-the pin):
+every push to `main` that touches `versions.json` and once an hour, and exits in seconds when the host
+already serves the pin). The hourly run is there because the runtime's bot mirror pushes do not start
+workflows in this repo: the v0.10.98 pin sat unpublished for two days and the app quietly left tablets
+on their old services:
 
 1. downloads the two APKs + the licence notices from the private vendor release with
    `LEIALOFT_GITHUB_TOKEN`;

@@ -31,10 +31,16 @@ name: publish-cnsdk-services
 # signing certificate against the pin it carries, and Android itself refuses an update to a
 # built-in app that is not signed with that app's key.
 #
-# Triggers: workflow_dispatch (optionally with a tag), and any push to main that touches
-# versions.json — the runtime's versions-bump mirror is such a push. A run whose tag the host
-# already serves exits in seconds, so the push trigger costs nothing when cnsdk_services did
-# not move.
+# Triggers: workflow_dispatch (optionally with a tag), any push to main that touches
+# versions.json, and an hourly schedule. A run whose tag the host already serves exits in
+# seconds, so the push and schedule triggers cost nothing when cnsdk_services did not move.
+#
+# Why the schedule: the runtime's versions-bump mirror pushes versions.json here as
+# displayxr-publish-bot, and those pushes have never started a workflow in this repo (no
+# push-event run of any workflow exists for a bot commit). The pin moved to v0.10.98 on
+# 2026-11-08 (a29ec4f), nothing published it, the host answered 404, and every tablet set up
+# with the installer app from then on silently kept its old services. The hourly run closes
+# that gap within an hour, whatever the reason the push did not fire.
 
 on:
   workflow_dispatch:
@@ -50,6 +56,8 @@ on:
   push:
     branches: [main]
     paths: [versions.json]
+  schedule:
+    - cron: "23 * * * *"
 
 permissions:
   contents: read
