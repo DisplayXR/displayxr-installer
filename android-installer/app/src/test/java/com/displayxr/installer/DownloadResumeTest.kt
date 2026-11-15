@@ -31,6 +31,8 @@ class DownloadResumeTest {
     @Volatile private var cutAfter = 1_000_000
     @Volatile private var honourRange = true
     @Volatile private var status = 200
+    /** Answer the first request that carries a Range with this, once: "misrange" | "unparseable" | "416". */
+    @Volatile private var rangedOnce: String? = null
 
     private val url get() = "http://127.0.0.1:${server.localPort}/asset.apk"
 
@@ -40,7 +42,9 @@ class DownloadResumeTest {
         thread(isDaemon = true) {
             while (!server.isClosed) {
                 val sock = try { server.accept() } catch (e: Exception) { break }
-                sock.use { so ->
+                // A client that drops an answer it will not use (a discarded 206) resets
+                // the socket mid-body; that must end this connection, not the server.
+                try { sock.use { so ->
                     val input = so.getInputStream().bufferedReader(Charsets.ISO_8859_1)
                     input.readLine() ?: return@use
                     val headers = HashMap<String, String>()
@@ -57,12 +61,20 @@ class DownloadResumeTest {
                         out.write("HTTP/1.1 $status X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                         out.flush(); return@use
                     }
-                    val from = if (honourRange && range != null) range.removePrefix("bytes=").removeSuffix("-").toInt() else 0
+                    val odd = if (range != null) rangedOnce?.also { rangedOnce = null } else null
+                    if (odd == "416") {
+                        out.write("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                        out.flush(); return@use
+                    }
+                    var from = if (honourRange && range != null) range.removePrefix("bytes=").removeSuffix("-").toInt() else 0
+                    // A CDN that answers a different range than the one asked for.
+                    if (odd == "misrange") from += 5_000
                     val slice = body.copyOfRange(from, body.size)
                     val head = buildString {
                         append(if (from > 0) "HTTP/1.1 206 Partial\r\n" else "HTTP/1.1 200 OK\r\n")
                         append("Content-Length: ${slice.size}\r\n")
-                        if (from > 0) append("Content-Range: bytes $from-${body.size - 1}/${body.size}\r\n")
+                        if (from > 0 && odd == "unparseable") append("Content-Range: bytes */${body.size}\r\n")
+                        else if (from > 0) append("Content-Range: bytes $from-${body.size - 1}/${body.size}\r\n")
                         append("Connection: close\r\n\r\n")
                     }
                     out.write(head.toByteArray())
@@ -70,6 +82,8 @@ class DownloadResumeTest {
                     if (requests.size <= dropFirst) out.write(slice, 0, minOf(cutAfter, slice.size))
                     else out.write(slice)
                     out.flush()
+                } } catch (e: java.io.IOException) {
+                    // next connection
                 }
             }
         }
@@ -129,6 +143,33 @@ class DownloadResumeTest {
         assertEquals(3, requests.size)
     }
 
+    /** One dropped connection, then [mode] for the resume: the file must still be exactly [body]. */
+    private fun resumeAnsweredWith(mode: String) {
+        dropFirst = 1
+        rangedOnce = mode
+        val dest = File.createTempFile("download", ".apk")
+        val retries = fetch(dest)
+        assertTrue("file content must be the real file after a $mode resume", dest.readBytes().contentEquals(body))
+        assertEquals(listOf(1, 2), retries)
+        assertEquals("bytes=1000000-", requests[1]["Range"])
+        // The odd answer discarded the partial file, so the next request starts over.
+        assertEquals(null, requests[2]["Range"])
+        assertEquals(3, requests.size)
+        dest.delete()
+    }
+
+    @Test
+    fun `a 206 from the wrong offset discards the partial file instead of writing it from 0`() =
+        resumeAnsweredWith("misrange")
+
+    @Test
+    fun `a 206 with an unparseable Content-Range discards the partial file`() =
+        resumeAnsweredWith("unparseable")
+
+    @Test
+    fun `a 416 on an incomplete file starts over instead of resending the same Range`() =
+        resumeAnsweredWith("416")
+
     @Test
     fun `a 404 is not retried`() {
         status = 404
@@ -167,10 +208,16 @@ class ResumeDecisionTest {
     }
 
     @Test
-    fun `206 from where we are appends, from elsewhere restarts`() {
+    fun `206 from where we are appends, from 0 restarts, from elsewhere discards`() {
         assertEquals(ResumeDecision.Append(1000), ResumeDecision.decide(100, 206, "bytes 100-999/1000", 900, -1))
+        // bytes 0-… is the whole file from its first byte: writing it from 0 is right.
         assertEquals(ResumeDecision.Restart(1000), ResumeDecision.decide(100, 206, "bytes 0-999/1000", 1000, -1))
-        assertEquals(ResumeDecision.Restart(-1), ResumeDecision.decide(100, 206, null, 900, -1))
+        // Any other start cannot be placed: writing it from 0 is a wrong-content file.
+        assertEquals(ResumeDecision.Discard, ResumeDecision.decide(100, 206, "bytes 50-999/1000", 950, -1))
+        assertEquals(ResumeDecision.Discard, ResumeDecision.decide(100, 206, "bytes 200-999/1000", 800, 1000))
+        // No Content-Range, or one that does not parse: where the body starts is unknown.
+        assertEquals(ResumeDecision.Discard, ResumeDecision.decide(100, 206, null, 900, -1))
+        assertEquals(ResumeDecision.Discard, ResumeDecision.decide(100, 206, "bytes */1000", 900, 1000))
     }
 
     @Test
@@ -188,7 +235,11 @@ class ResumeDecisionTest {
     @Test
     fun `416 is complete only when we hold exactly the known size`() {
         assertEquals(ResumeDecision.Complete(1000), ResumeDecision.decide(1000, 416, null, -1, 1000))
-        assertEquals(ResumeDecision.Restart(-1), ResumeDecision.decide(1000, 416, null, -1, -1))
+        // Size unknown, or the partial file is not that size: discard it, never
+        // resend the same Range (that got the same 416 every attempt).
+        assertEquals(ResumeDecision.Discard, ResumeDecision.decide(1000, 416, null, -1, -1))
+        assertEquals(ResumeDecision.Discard, ResumeDecision.decide(1500, 416, null, -1, 1000))
+        assertEquals(ResumeDecision.Discard, ResumeDecision.decide(500, 416, null, -1, 1000))
     }
 
     @Test
