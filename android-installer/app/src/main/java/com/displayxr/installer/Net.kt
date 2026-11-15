@@ -193,6 +193,14 @@ object Net {
                 is ResumeDecision.Complete -> return decision.total
                 is ResumeDecision.Append -> true to decision.total
                 is ResumeDecision.Restart -> false to decision.total
+                is ResumeDecision.Discard -> {
+                    // The answer does not line up with the bytes on disk, so neither
+                    // appending it nor writing it from offset 0 yields the file. Drop
+                    // the partial file: the retry then asks for the whole file with
+                    // no Range, instead of resending the same Range (#104).
+                    dest.delete()
+                    throw InstallerFailure.Truncated(name, 0, knownTotal)
+                }
                 is ResumeDecision.Fail -> throw InstallerFailure.Http(code, url, "")
             }
             var written = if (append) have else 0L
@@ -264,8 +272,22 @@ sealed class ResumeDecision {
     /** 206 from exactly where we are: append. */
     data class Append(val total: Long) : ResumeDecision()
 
-    /** 200 (Range ignored) or a 206 from somewhere else: start the file over. */
+    /**
+     * 200 (Range ignored), or a 206 of `bytes 0-…`, which is the file from its
+     * first byte: write it from offset 0.
+     */
     data class Restart(val total: Long) : ResumeDecision()
+
+    /**
+     * The answer cannot be placed in the file: a 206 that starts neither where we
+     * are nor at 0, a 206 whose Content-Range does not parse, or a 416 while we do
+     * not hold exactly the known size. Writing that body from offset 0 produced a
+     * file of the right length and the wrong content; resending the same Range
+     * got the same 416. Delete the partial file and retry from scratch.
+     */
+    object Discard : ResumeDecision() {
+        override fun toString() = "Discard"
+    }
 
     /** 416 while we already hold every byte: nothing to fetch. */
     data class Complete(val total: Long) : ResumeDecision()
@@ -291,9 +313,10 @@ sealed class ResumeDecision {
                 206 -> {
                     val cr = parseContentRange(contentRange)
                     when {
-                        cr == null -> Restart(pick(null))
+                        cr == null -> Discard
                         cr.first == have -> Append(pick(cr.second))
-                        else -> Restart(pick(cr.second))
+                        cr.first == 0L -> Restart(pick(cr.second))
+                        else -> Discard
                     }
                 }
 
@@ -301,7 +324,9 @@ sealed class ResumeDecision {
                 416 ->
                     // "Range not satisfiable" for bytes=have- means have >= size. If we know
                     // the size and hold exactly that, the previous attempt had finished.
-                    if (knownTotal > 0 && have == knownTotal) Complete(knownTotal) else Restart(pick(null))
+                    // Otherwise the bytes on disk are suspect (longer than the file, or
+                    // its size is unknown): discard them rather than re-asking.
+                    if (knownTotal > 0 && have == knownTotal) Complete(knownTotal) else Discard
 
                 else -> Fail(code)
             }
