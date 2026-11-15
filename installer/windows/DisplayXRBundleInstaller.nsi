@@ -401,6 +401,28 @@ FunctionEnd
 !macroend
 
 ;--------------------------------
+; ExecChild -- ExecWait a child installer/uninstaller and leave its exit code
+; in $0, or "could-not-start" when Windows could not launch it at all
+; (missing file, blocked by AV, bad UninstallString).
+;
+; ExecWait with an output variable reports a failed launch ONLY through the
+; error flag and leaves the variable untouched, so $0 kept whatever it held
+; before -- usually "0" from an earlier nsExec Pop -- and a child that never
+; ran read as a clean exit (#103). Every caller tests `$0 != 0` (a LogicLib
+; string compare), which treats "could-not-start" as a failure.
+;
+; Args: CmdLine (the full quoted command line)
+;--------------------------------
+!macro ExecChild CmdLine
+    StrCpy $0 ""
+    ClearErrors
+    ExecWait '${CmdLine}' $0
+    ${If} ${Errors}
+        StrCpy $0 "could-not-start"
+    ${EndIf}
+!macroend
+
+;--------------------------------
 ; UpgradeOrSkip — for an ALREADY-installed component, re-run its staged
 ; sub-installer /S only when the bundle's pinned target version is strictly
 ; newer than what's installed (#346). Never downgrades.
@@ -461,7 +483,7 @@ FunctionEnd
 ; and older runtime installers ignore /CLOSEAPPS, so it is safe for any child.
 ;
 ; In:  $G_ChildExe (staged filename in $INSTDIR), $G_ChildHuman, $G_ChildArgs
-; Out: $0 = the child's final exit code
+; Out: $0 = the child's final exit code, or "could-not-start" (see ExecChild)
 ;--------------------------------
 Var G_ChildExe
 Var G_ChildHuman
@@ -473,9 +495,8 @@ Function RunChildInstaller
     Push $R7
     StrCpy $R6 ""            ; extra switches for a retry run
   rci_run:
-    ClearErrors
     StrCpy $G_ChildRan 1
-    ExecWait '"$INSTDIR\$G_ChildExe" /S $G_ChildArgs$R6' $0
+    !insertmacro ExecChild '"$INSTDIR\$G_ChildExe" /S $G_ChildArgs$R6'
     StrCmp $0 "6" 0 rci_done
 
     ReadRegStr $R7 HKLM "Software\DisplayXR\Runtime" "LastInstallBlockers"
@@ -909,9 +930,10 @@ SectionGroup /e "Workspace" SecGrpWorkspace
             ${If} $G_ShellInstalled == 0
                 DetailPrint "Installing DisplayXR Shell..."
                 File "${BUNDLE_STAGE}\${SHELL_EXE}"
-                ClearErrors
-                StrCpy $G_ChildRan 1
-                ExecWait '"$INSTDIR\${SHELL_EXE}" /S' $0
+                StrCpy $G_ChildExe   "${SHELL_EXE}"
+                StrCpy $G_ChildHuman "DisplayXR Shell"
+                StrCpy $G_ChildArgs  ""
+                Call RunChildInstaller
                 ${If} $0 != 0
                     !insertmacro ChildFailed "DisplayXR Shell" $0 0
                 ${EndIf}
@@ -924,7 +946,7 @@ SectionGroup /e "Workspace" SecGrpWorkspace
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRShell" "UninstallString"
             ${If} $1 != ""
                 StrCpy $G_ChildRan 1
-                ExecWait '$1 /S' $0
+                !insertmacro ExecChild '$1 /S'
                 !insertmacro ChildRemoved "DisplayXR Shell" $0
             ${EndIf}
         ${EndIf}
@@ -937,9 +959,10 @@ SectionGroup /e "Workspace" SecGrpWorkspace
             ${If} $G_McpInstalled == 0
                 DetailPrint "Installing DisplayXR MCP Tools..."
                 File "${BUNDLE_STAGE}\${MCP_EXE}"
-                ClearErrors
-                StrCpy $G_ChildRan 1
-                ExecWait '"$INSTDIR\${MCP_EXE}" /S' $0
+                StrCpy $G_ChildExe   "${MCP_EXE}"
+                StrCpy $G_ChildHuman "DisplayXR MCP Tools"
+                StrCpy $G_ChildArgs  ""
+                Call RunChildInstaller
                 ${If} $0 != 0
                     !insertmacro ChildFailed "DisplayXR MCP Tools" $0 0
                 ${EndIf}
@@ -952,7 +975,7 @@ SectionGroup /e "Workspace" SecGrpWorkspace
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMCP" "UninstallString"
             ${If} $1 != ""
                 StrCpy $G_ChildRan 1
-                ExecWait '$1 /S' $0
+                !insertmacro ExecChild '$1 /S'
                 !insertmacro ChildRemoved "DisplayXR MCP Tools" $0
             ${EndIf}
         ${EndIf}
@@ -967,9 +990,10 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
             ${If} $G_LeiaInstalled == 0
                 DetailPrint "Installing Leia SR plug-in..."
                 File "${BUNDLE_STAGE}\${LEIA_EXE}"
-                ClearErrors
-                StrCpy $G_ChildRan 1
-                ExecWait '"$INSTDIR\${LEIA_EXE}" /S /NOSTART' $0
+                StrCpy $G_ChildExe   "${LEIA_EXE}"
+                StrCpy $G_ChildHuman "Leia SR plug-in"
+                StrCpy $G_ChildArgs  "/NOSTART"
+                Call RunChildInstaller
                 ${If} $0 != 0
                     !insertmacro ChildFailed "Leia SR plug-in" $0 0
                 ${EndIf}
@@ -982,7 +1006,7 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaSR" "UninstallString"
             ${If} $1 != ""
                 StrCpy $G_ChildRan 1
-                ExecWait '$1 /S' $0
+                !insertmacro ExecChild '$1 /S'
                 !insertmacro ChildRemoved "Leia SR plug-in" $0
             ${EndIf}
         ${EndIf}
@@ -1001,9 +1025,10 @@ SectionGroup /e "Conversion providers" SecGrpConversion
             ${If} $G_OpenConvInstalled == 0
                 DetailPrint "Installing Open Conversion provider..."
                 File "${BUNDLE_STAGE}\${OPENCONV_EXE}"
-                ClearErrors
-                StrCpy $G_ChildRan 1
-                ExecWait '"$INSTDIR\${OPENCONV_EXE}" /S' $0
+                StrCpy $G_ChildExe   "${OPENCONV_EXE}"
+                StrCpy $G_ChildHuman "Open Conversion provider"
+                StrCpy $G_ChildArgs  ""
+                Call RunChildInstaller
                 ${If} $0 != 0
                     !insertmacro ChildFailed "Open Conversion provider" $0 0
                 ${EndIf}
@@ -1016,7 +1041,7 @@ SectionGroup /e "Conversion providers" SecGrpConversion
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXROpenConversion" "UninstallString"
             ${If} $1 != ""
                 StrCpy $G_ChildRan 1
-                ExecWait '$1 /S' $0
+                !insertmacro ExecChild '$1 /S'
                 !insertmacro ChildRemoved "Open Conversion provider" $0
             ${EndIf}
         ${EndIf}
@@ -1031,9 +1056,10 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ${If} $G_GaussInstalled == 0
                 DetailPrint "Installing Gaussian Splat viewer..."
                 File "${BUNDLE_STAGE}\${GAUSS_EXE}"
-                ClearErrors
-                StrCpy $G_ChildRan 1
-                ExecWait '"$INSTDIR\${GAUSS_EXE}" /S' $0
+                StrCpy $G_ChildExe   "${GAUSS_EXE}"
+                StrCpy $G_ChildHuman "Gaussian Splat viewer"
+                StrCpy $G_ChildArgs  ""
+                Call RunChildInstaller
                 ${If} $0 != 0
                     !insertmacro ChildFailed "Gaussian Splat" $0 0
                 ${EndIf}
@@ -1046,7 +1072,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRGaussianSplat" "UninstallString"
             ${If} $1 != ""
                 StrCpy $G_ChildRan 1
-                ExecWait '$1 /S' $0
+                !insertmacro ExecChild '$1 /S'
                 !insertmacro ChildRemoved "Gaussian Splat viewer" $0
             ${EndIf}
         ${EndIf}
@@ -1059,9 +1085,10 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ${If} $G_ModelViewerInstalled == 0
                 DetailPrint "Installing 3D Model Viewer..."
                 File "${BUNDLE_STAGE}\${MODELVIEWER_EXE}"
-                ClearErrors
-                StrCpy $G_ChildRan 1
-                ExecWait '"$INSTDIR\${MODELVIEWER_EXE}" /S' $0
+                StrCpy $G_ChildExe   "${MODELVIEWER_EXE}"
+                StrCpy $G_ChildHuman "3D Model Viewer"
+                StrCpy $G_ChildArgs  ""
+                Call RunChildInstaller
                 ${If} $0 != 0
                     !insertmacro ChildFailed "3D Model Viewer" $0 0
                 ${EndIf}
@@ -1074,7 +1101,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRModelViewer" "UninstallString"
             ${If} $1 != ""
                 StrCpy $G_ChildRan 1
-                ExecWait '$1 /S' $0
+                !insertmacro ExecChild '$1 /S'
                 !insertmacro ChildRemoved "3D Model Viewer" $0
             ${EndIf}
         ${EndIf}
@@ -1087,9 +1114,10 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ${If} $G_MediaPlayerInstalled == 0
                 DetailPrint "Installing Stereo Media Player..."
                 File "${BUNDLE_STAGE}\${MEDIAPLAYER_EXE}"
-                ClearErrors
-                StrCpy $G_ChildRan 1
-                ExecWait '"$INSTDIR\${MEDIAPLAYER_EXE}" /S' $0
+                StrCpy $G_ChildExe   "${MEDIAPLAYER_EXE}"
+                StrCpy $G_ChildHuman "Stereo Media Player"
+                StrCpy $G_ChildArgs  ""
+                Call RunChildInstaller
                 ${If} $0 != 0
                     !insertmacro ChildFailed "Stereo Media Player" $0 0
                 ${EndIf}
@@ -1102,7 +1130,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMediaPlayer" "UninstallString"
             ${If} $1 != ""
                 StrCpy $G_ChildRan 1
-                ExecWait '$1 /S' $0
+                !insertmacro ExecChild '$1 /S'
                 !insertmacro ChildRemoved "Stereo Media Player" $0
             ${EndIf}
         ${EndIf}
@@ -1115,9 +1143,10 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ${If} $G_AvatarInstalled == 0
                 DetailPrint "Installing 3D Avatar..."
                 File "${BUNDLE_STAGE}\${AVATAR_EXE}"
-                ClearErrors
-                StrCpy $G_ChildRan 1
-                ExecWait '"$INSTDIR\${AVATAR_EXE}" /S' $0
+                StrCpy $G_ChildExe   "${AVATAR_EXE}"
+                StrCpy $G_ChildHuman "3D Avatar"
+                StrCpy $G_ChildArgs  ""
+                Call RunChildInstaller
                 ${If} $0 != 0
                     !insertmacro ChildFailed "3D Avatar" $0 0
                 ${EndIf}
@@ -1130,7 +1159,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRAvatar" "UninstallString"
             ${If} $1 != ""
                 StrCpy $G_ChildRan 1
-                ExecWait '$1 /S' $0
+                !insertmacro ExecChild '$1 /S'
                 !insertmacro ChildRemoved "3D Avatar" $0
             ${EndIf}
         ${EndIf}
@@ -1143,9 +1172,10 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ${If} $G_EarthViewInstalled == 0
                 DetailPrint "Installing EarthView..."
                 File "${BUNDLE_STAGE}\${EARTHVIEW_EXE}"
-                ClearErrors
-                StrCpy $G_ChildRan 1
-                ExecWait '"$INSTDIR\${EARTHVIEW_EXE}" /S' $0
+                StrCpy $G_ChildExe   "${EARTHVIEW_EXE}"
+                StrCpy $G_ChildHuman "EarthView"
+                StrCpy $G_ChildArgs  ""
+                Call RunChildInstaller
                 ${If} $0 != 0
                     !insertmacro ChildFailed "EarthView" $0 0
                 ${EndIf}
@@ -1158,7 +1188,7 @@ SectionGroup /e "Demos & samples" SecGrpDemos
             ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXREarthView" "UninstallString"
             ${If} $1 != ""
                 StrCpy $G_ChildRan 1
-                ExecWait '$1 /S' $0
+                !insertmacro ExecChild '$1 /S'
                 !insertmacro ChildRemoved "EarthView" $0
             ${EndIf}
         ${EndIf}
@@ -1491,7 +1521,7 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXREarthView" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling EarthView..."
-        ExecWait '$ChildUninstall /S' $0
+        !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}
 
@@ -1500,7 +1530,7 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRAvatar" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling 3D Avatar..."
-        ExecWait '$ChildUninstall /S' $0
+        !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}
 
@@ -1509,7 +1539,7 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMediaPlayer" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling Stereo Media Player..."
-        ExecWait '$ChildUninstall /S' $0
+        !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}
 
@@ -1518,7 +1548,7 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRModelViewer" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling 3D Model Viewer..."
-        ExecWait '$ChildUninstall /S' $0
+        !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}
 
@@ -1527,7 +1557,7 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRGaussianSplat" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling Gaussian Splat viewer..."
-        ExecWait '$ChildUninstall /S' $0
+        !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}
 
@@ -1536,7 +1566,7 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXROpenConversion" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling Open Conversion provider..."
-        ExecWait '$ChildUninstall /S' $0
+        !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}
 
@@ -1549,7 +1579,7 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMCP" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling DisplayXR MCP Tools..."
-        ExecWait '$ChildUninstall /S' $0
+        !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}
 
@@ -1558,7 +1588,7 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaSR" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling Leia SR Plug-in..."
-        ExecWait '$ChildUninstall /S' $0
+        !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}
 
@@ -1567,7 +1597,7 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRShell" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling DisplayXR Shell..."
-        ExecWait '$ChildUninstall /S' $0
+        !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}
 
@@ -1593,7 +1623,7 @@ Section "Uninstall"
         ${If} $R2 != ""
         ${AndIf} ${FileExists} "$R2\Uninstall.exe"
             DetailPrint "Uninstalling Unity test app '$R0'..."
-            ExecWait '"$R2\Uninstall.exe" /S' $0
+            !insertmacro ExecChild '"$R2\Uninstall.exe" /S'
             DetailPrint "  exit code: $0"
         ${EndIf}
         DeleteRegKey HKLM "Software\DisplayXR\Unity\$R0"
@@ -1608,7 +1638,7 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXR" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling DisplayXR Runtime..."
-        ExecWait '$ChildUninstall /S' $0
+        !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}
 
