@@ -42,7 +42,9 @@ class DownloadResumeTest {
         thread(isDaemon = true) {
             while (!server.isClosed) {
                 val sock = try { server.accept() } catch (e: Exception) { break }
-                sock.use { so ->
+                // A client that drops an answer it will not use (a discarded 206) resets
+                // the socket mid-body; that must end this connection, not the server.
+                try { sock.use { so ->
                     val input = so.getInputStream().bufferedReader(Charsets.ISO_8859_1)
                     input.readLine() ?: return@use
                     val headers = HashMap<String, String>()
@@ -80,6 +82,8 @@ class DownloadResumeTest {
                     if (requests.size <= dropFirst) out.write(slice, 0, minOf(cutAfter, slice.size))
                     else out.write(slice)
                     out.flush()
+                } } catch (e: java.io.IOException) {
+                    // next connection
                 }
             }
         }
