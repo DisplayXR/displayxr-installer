@@ -105,18 +105,28 @@ Name        "DisplayXR ${BUNDLE_VERSION}"
 OutFile     "${OUTPUT_DIR}\DisplayXRBundle-${BUNDLE_VERSION}.exe"
 RequestExecutionLevel admin
 ; $INSTDIR is PURE SCRATCH: each section extracts its staged child .exe
-; here, runs it, and deletes it again immediately — child installers put
-; their real payload in their own Program Files locations. $TEMP is the
-; right home for that transient churn.
+; here, runs it elevated, and deletes it again immediately — child
+; installers put their real payload in their own Program Files locations.
 ;
-; Nothing that must outlive the install may live here: $TEMP is wiped by
-; Storage Sense / Disk Cleanup. Both survivors go to ${BUNDLE_CACHE_DIR}
+; It must be a directory only administrators can write. It used to be
+; $TEMP\DisplayXRBundle-<ver>: under ordinary same-user UAC elevation
+; $TEMP is the user's own %LOCALAPPDATA%\Temp, which every non-elevated
+; process of that user can write, so a staged .exe could be pre-placed or
+; swapped between File and ExecWait and would then run elevated. A fresh
+; directory under Program Files inherits an admin/SYSTEM-only ACL.
+; .onInit forces $INSTDIR to it (a /D= switch is ignored: the directory
+; is removed recursively, so it must never be caller-chosen), and it is
+; removed again when the bundle finishes, fails or is cancelled.
+;
+; Nothing that must outlive the install may live here (when this was
+; $TEMP, Storage Sense / Disk Cleanup wiped it). Both survivors go to ${BUNDLE_CACHE_DIR}
 ; (a stable ProgramData path) instead — the cached bundle .exe behind the
 ; ARP Modify button, and the uninstaller itself. Parking the uninstaller
 ; in $TEMP orphaned the ARP entry as soon as Windows swept the dir: the
 ; "DisplayXR <ver>" row survived pointing at a deleted .exe, leaving the
 ; stack un-uninstallable and blocking clean upgrades.
-InstallDir  "$TEMP\DisplayXRBundle-${BUNDLE_VERSION}"
+!define BUNDLE_STAGING_DIR "$PROGRAMFILES64\DisplayXR\BundleStaging"
+InstallDir  "${BUNDLE_STAGING_DIR}"
 ShowInstDetails show
 ShowUninstDetails show
 
@@ -207,7 +217,7 @@ Var G_EarthViewVer
 !define BUNDLE_CACHE_DIR   "$APPDATA\DisplayXR\BundleInstaller"
 ; A copy of the bundle .exe, so ARP Modify can re-run it.
 !define BUNDLE_CACHE_FILE  "${BUNDLE_CACHE_DIR}\DisplayXRBundle-${BUNDLE_VERSION}.exe"
-; The bundle's own uninstaller. Must NOT live in $INSTDIR ($TEMP).
+; The bundle's own uninstaller. Must NOT live in $INSTDIR (scratch, removed after the run).
 !define BUNDLE_UNINST_FILE "${BUNDLE_CACHE_DIR}\Uninstall-DisplayXRBundle.exe"
 
 ;--------------------------------
@@ -555,7 +565,9 @@ Function RuntimeHolderPreflight
 
     StrCpy $3 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
     IfFileExists "$3" +2
-    StrCpy $3 "powershell.exe"
+    ; Full path, never a bare name: a bare name is searched for in the
+    ; bundle's own directory (often Downloads) first.
+    StrCpy $3 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
 
   rhp_scan:
     ; `$$` is a literal '$' for PowerShell.
@@ -716,7 +728,7 @@ Function ProbeContentAll
     ${If} $G_ProbeMap == ""
         Return
     ${EndIf}
-    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\probe-zero-filled.ps1" -Map "$G_ProbeMap"'
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${BUNDLE_STAGING_DIR}\probe-zero-filled.ps1" -Map "$G_ProbeMap"'
     Pop $0                   ; exit code ("error" if it could not launch)
     Pop $1                   ; stdout
     ${If} $0 == 0
@@ -843,9 +855,13 @@ Section "-StopDisplayXRProcesses"
         Call RuntimeHolderPreflight
     ${EndIf}
     DetailPrint "Stopping DisplayXR processes for the install chain..."
-    nsExec::ExecToLog 'taskkill /f /im displayxr-shell.exe'
+    ; Full $SYSDIR paths for system tools (here and below): this process is
+    ; elevated, and a bare name is looked up in the bundle's own directory
+    ; first. $SYSDIR is redirected to SysWOW64 for this 32-bit process,
+    ; which has taskkill.exe too.
+    nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /f /im displayxr-shell.exe'
     Pop $0
-    nsExec::ExecToLog 'taskkill /f /im displayxr-service.exe'
+    nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /f /im displayxr-service.exe'
     Pop $0
     Sleep 1500   ; let killed processes release their file handles
 SectionEnd
@@ -1219,7 +1235,7 @@ Section "-FinalizeBundleArp"
     !insertmacro PurgeBundleCaches "DisplayXRBundle-${BUNDLE_VERSION}.exe" INSTALL
 
     ; Uninstaller goes to the stable cache dir, NOT $INSTDIR — $INSTDIR is
-    ; $TEMP and gets swept, which orphans the ARP entry below.
+    ; scratch that is removed at the end of the run, which would orphan the ARP entry below.
     WriteUninstaller "${BUNDLE_UNINST_FILE}"
 
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
@@ -1292,7 +1308,7 @@ Section "-FinalizeBundleArp"
     ; installed is still there after a failed upgrade, and must come back).
     ; -----------------------------------------------------------------
     DetailPrint "Restarting DisplayXR Service to re-probe display processors..."
-    nsExec::ExecToLog 'taskkill /f /im displayxr-service.exe'
+    nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /f /im displayxr-service.exe'
     Pop $0
     Sleep 1500   ; let the killed process release its handles
 
@@ -1305,7 +1321,7 @@ Section "-FinalizeBundleArp"
         ; service, and every child the service spawns inherits the elevation).
         ; Launch through the user's explorer.exe (Medium), the same way the
         ; logon Run key starts it. Non-blocking, mirrors the runtime installer.
-        Exec 'explorer.exe "$1\displayxr-service.exe"'
+        Exec '"$WINDIR\explorer.exe" "$1\displayxr-service.exe"'
         DetailPrint "DisplayXR Service restarted from $1."
     ${Else}
         DetailPrint "displayxr-service.exe not found via Software\DisplayXR\Runtime\InstallPath ($1) — skipping restart."
@@ -1321,6 +1337,9 @@ Section "-FinalizeBundleArp"
         SetErrorLevel 3
     ${EndIf}
 
+    ; Every child has run: remove the admin-only staging directory.
+    Call RemoveStagingDir
+
     ; Last, so the file holds every line above it.
     DetailPrint "Install log: ${BUNDLE_LOG_FILE}"
     Push "completed"
@@ -1330,8 +1349,44 @@ SectionEnd
 ; An Abort (the preflight's Abort button) skips -FinalizeBundleArp; keep the
 ; log for that run too.
 Function .onInstFailed
+    Call RemoveStagingDir
     Push "aborted"
     Call WriteInstallLog
+FunctionEnd
+
+; Cancel on a wizard page (before any section ran) leaves the probe script
+; that .onInit staged. Silent runs never get here; they end in
+; -FinalizeBundleArp or .onInstFailed.
+Function .onGUIEnd
+    Call RemoveStagingDir
+FunctionEnd
+
+;--------------------------------
+; Staging directory (see InstallDir). Created fresh in .onInit, removed by
+; RemoveStagingDir. Always the fixed ${BUNDLE_STAGING_DIR}, never $INSTDIR,
+; so nothing a caller passes can widen the recursive delete.
+;--------------------------------
+Function CreateStagingDir
+    ; A leftover from a run that crashed: only an administrator could have
+    ; created or written it, but start from empty anyway.
+    RMDir /r "${BUNDLE_STAGING_DIR}"
+    ClearErrors
+    CreateDirectory "${BUNDLE_STAGING_DIR}"
+    ${If} ${Errors}
+    ${OrIfNot} ${FileExists} "${BUNDLE_STAGING_DIR}\*.*"
+        MessageBox MB_OK|MB_ICONSTOP "Cannot create the staging folder ${BUNDLE_STAGING_DIR}." /SD IDOK
+        SetErrorLevel 2
+        Quit
+    ${EndIf}
+FunctionEnd
+
+Function RemoveStagingDir
+    ; Leave it as the working directory (SetOutPath made it one) first, or
+    ; the directory itself cannot be removed.
+    SetOutPath "$PLUGINSDIR"
+    RMDir /r "${BUNDLE_STAGING_DIR}"
+    ; Only if empty: DisplayXR\ normally holds the installed components.
+    RMDir "$PROGRAMFILES64\DisplayXR"
 FunctionEnd
 
 ;--------------------------------
@@ -1377,7 +1432,12 @@ Function .onInit
     ; ProbeContent's scanner: one run over every ScanContent=1 component
     ; (keep this list in step with the DetectComponent calls below).
     InitPluginsDir
-    File "/oname=$PLUGINSDIR\probe-zero-filled.ps1" "${__FILEDIR__}\probe-zero-filled.ps1"
+    ; The child installers and the probe script run elevated, so they are
+    ; staged in an admin-only directory, not under the user-writable %TEMP%
+    ; (where $PLUGINSDIR lives). A /D= switch cannot move it.
+    StrCpy $INSTDIR "${BUNDLE_STAGING_DIR}"
+    Call CreateStagingDir
+    File "/oname=${BUNDLE_STAGING_DIR}\probe-zero-filled.ps1" "${__FILEDIR__}\probe-zero-filled.ps1"
     StrCpy $G_ProbeMap ""
     !insertmacro ProbeAdd "DisplayXRMCP"
     !insertmacro ProbeAdd "DisplayXRGaussianSplat"
