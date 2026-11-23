@@ -97,6 +97,14 @@ Schema: flat top-level keys matching the asset-table identifiers in
 [runtime's `scripts/lib/components.sh`](https://github.com/DisplayXR/displayxr-runtime/blob/main/scripts/lib/components.sh)
 (`runtime`, `shell`, `leia_plugin`, `mcp_tools`, `gauss_demo`, …).
 
+**A pin is not a bundle component.** `scripts/check_bundle_coverage.ps1` fails on any
+`versions.json` key that is neither chained by both build scripts nor named in its
+`$IntentionallyUnbundled` table (with the reason). A key for a component that has no release
+yet is listed there **before** its first release: the runtime adds such a key to `versions.json`
+on that first release and mirrors it here in the same run (`leia_conversion`, `ultraleap`).
+Where the bundle is going (a core bundle that downloads catalog components, plus an offline
+full bundle): `displayxr-runtime/docs/roadmap/catalog-driven-bundle.md`.
+
 Full design rationale:
 [`displayxr-runtime/docs/specs/runtime/versions-json-autobump.md`](https://github.com/DisplayXR/displayxr-runtime/blob/main/docs/specs/runtime/versions-json-autobump.md).
 
