@@ -21,6 +21,10 @@
 ;   LEIA_EXE         filename of staged leia plug-in installer
 ;   MCP_EXE          filename of staged mcp tools installer
 ;   OPENCONV_EXE     filename of staged open-conversion provider installer
+;   LEIACONV_EXE     OPTIONAL: filename of staged Leia conversion installer.
+;                    Passed (with LEIACONV_VER) only when the pinned Leia SR
+;                    plug-in no longer carries the conversion provider itself;
+;                    without it every Leia conversion line below compiles out.
 ;   GAUSS_EXE        filename of staged gaussian splat demo installer
 ;   MODELVIEWER_EXE  filename of staged 3D model viewer demo installer
 ;   MEDIAPLAYER_EXE  filename of staged stereo media player demo installer
@@ -94,6 +98,46 @@
 !ifndef EARTHVIEW_VER
     !error "EARTHVIEW_VER not defined"
 !endif
+;--------------------------------
+; Leia conversion gate (compile time).
+;
+; The Leia SR plug-in carried the conversion provider up to its 2.23.x line;
+; from LEIACONV_MIN_LEIA_VER on it does not, and the provider ships only as
+; the separate component chained here. The two switch in the SAME bundle:
+;   - the component must run AFTER the plug-in installer (the new plug-in
+;     removes its leftover copy and drops the registration only while it still
+;     points at that copy; the component then writes its own), and
+;   - it must never ride next to an OLDER plug-in: that installer writes the
+;     registration itself and would take it back, leaving the component
+;     installed but not the registered provider.
+; scripts\build-bundle.bat decides (scripts\leia_conversion_gate.ps1) and
+; passes LEIACONV_EXE only for a new enough plug-in. This block is the
+; backstop: a build that passes it next to an older plug-in does not compile.
+; Keep LEIACONV_MIN_LEIA_VER equal to the value in the two gate scripts
+; (scripts\check_bundle_coverage.ps1 compares them).
+;--------------------------------
+!define LEIACONV_MIN_LEIA_VER "2.24.0"
+!ifdef LEIACONV_EXE
+    !ifndef LEIACONV_VER
+        !error "LEIACONV_EXE is defined but LEIACONV_VER is not"
+    !endif
+    !searchparse /noerrors "${LEIA_VER}" "" _LC_HAVE_MAJ "." _LC_HAVE_MIN "." _LC_HAVE_PAT
+    !searchparse /noerrors "${LEIACONV_MIN_LEIA_VER}" "" _LC_MIN_MAJ "." _LC_MIN_MIN "." _LC_MIN_PAT
+    !ifndef _LC_HAVE_PAT
+        !error "Leia conversion is chained but LEIA_VER '${LEIA_VER}' is not X.Y.Z, so the plug-in cannot be checked against ${LEIACONV_MIN_LEIA_VER}"
+    !endif
+    !define /math _LC_HAVE_A ${_LC_HAVE_MAJ} * 1000
+    !define /math _LC_HAVE_B ${_LC_HAVE_A} + ${_LC_HAVE_MIN}
+    !define /math _LC_HAVE_C ${_LC_HAVE_B} * 1000
+    !define /math _LC_HAVE_N ${_LC_HAVE_C} + ${_LC_HAVE_PAT}
+    !define /math _LC_MIN_A ${_LC_MIN_MAJ} * 1000
+    !define /math _LC_MIN_B ${_LC_MIN_A} + ${_LC_MIN_MIN}
+    !define /math _LC_MIN_C ${_LC_MIN_B} * 1000
+    !define /math _LC_MIN_N ${_LC_MIN_C} + ${_LC_MIN_PAT}
+    !if ${_LC_HAVE_N} < ${_LC_MIN_N}
+        !error "Leia conversion is chained while the Leia SR plug-in is ${LEIA_VER} (< ${LEIACONV_MIN_LEIA_VER}). That plug-in still carries the conversion provider and its installer would take the registration back. Chain the component only together with leia_plugin >= ${LEIACONV_MIN_LEIA_VER}."
+    !endif
+!endif
 !ifndef BUNDLE_STAGE
     !error "BUNDLE_STAGE not defined"
 !endif
@@ -163,6 +207,9 @@ Var G_ShellInstalled
 Var G_LeiaInstalled
 Var G_McpInstalled
 Var G_OpenConvInstalled
+!ifdef LEIACONV_EXE
+Var G_LeiaConvInstalled
+!endif
 Var G_GaussInstalled
 Var G_ModelViewerInstalled
 Var G_MediaPlayerInstalled
@@ -194,6 +241,9 @@ Var G_ShellVer
 Var G_LeiaVer
 Var G_McpVer
 Var G_OpenConvVer
+!ifdef LEIACONV_EXE
+Var G_LeiaConvVer
+!endif
 Var G_GaussVer
 Var G_ModelViewerVer
 Var G_MediaPlayerVer
@@ -614,6 +664,8 @@ FunctionEnd
 ;   DisplayIcon     -> the component's main payload file
 ; Verified to hold for all nine children (runtime, shell, leia-plugin, mcp,
 ; five demos), which is why one uniform probe needs no per-component table.
+; It holds for the Leia conversion component too (quoted UninstallString,
+; DisplayIcon = its provider binary).
 ;
 ; DisplayIcon also has a documented "path,index" form. None of ours use it;
 ; one that did would read as permanently broken here and reinstall on every
@@ -1011,6 +1063,73 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
             ${EndIf}
         ${EndIf}
     SectionEnd
+
+!ifdef LEIACONV_EXE
+    ; Leia conversion: the display maker's 2D-to-3D conversion provider, a
+    ; separate component since the plug-in stopped carrying it.
+    ;
+    ; ORDER IS LOAD-BEARING: this section must stay AFTER "Leia SR plug-in".
+    ; On an upgrade the plug-in installer above removes the provider copy an
+    ; older plug-in left behind and drops the registration that pointed at it;
+    ; this installer then writes the registration for its own copy. That is
+    ; the order the handover is specified in (displayxr-leia-conversion,
+    ; docs/installer.md, "Handover from the Leia SR plug-in").
+    ;
+    ; A sub-choice of the plug-in: it is only useful where the plug-in is, so
+    ; .onSelChange keeps it unchecked whenever "Leia SR plug-in" is unchecked.
+    ; It needs the Leia conversion runtime, which the display maker ships with
+    ; its own installer; the bundle never installs or looks for that.
+    ;
+    ; The child accepts /NOSTART (it never starts anything) and is passed it
+    ; like every child that could.
+    Section "Leia conversion" SecLeiaConv
+        !insertmacro SkipIfRuntimeFailed "Leia conversion"
+        SetOutPath "$INSTDIR"
+        ${If} ${SectionIsSelected} ${SecLeiaConv}
+            ; Installed and current is not enough: the component can be on disk
+            ; without being the REGISTERED provider. An older plug-in installer
+            ; run after it takes the registration; the plug-in upgrade above
+            ; then drops that registration with its leftover copy, and a
+            ; version compare here would answer "current - skipping" over a
+            ; box with no Leia conversion registered at all. So when the
+            ; registration does not point into this component's install dir,
+            ; run its installer again - that is what rewrites it.
+            ${If} $G_LeiaConvInstalled == 1
+                ReadRegStr $1 HKLM "Software\DisplayXR\Plugins\LeiaConversion" "InstallPath"
+                ReadRegStr $2 HKLM "Software\DisplayXR\ConversionProviders\leia-conversion" "Binary"
+                StrLen $3 $1
+                StrCpy $4 $2 $3
+                ${If} $1 == ""
+                ${OrIf} $4 != $1
+                    DetailPrint "Leia conversion is installed but is not the registered provider - registering it again."
+                    StrCpy $G_LeiaConvInstalled 0
+                ${EndIf}
+            ${EndIf}
+            ${If} $G_LeiaConvInstalled == 0
+                DetailPrint "Installing Leia conversion..."
+                File "${BUNDLE_STAGE}\${LEIACONV_EXE}"
+                StrCpy $G_ChildExe   "${LEIACONV_EXE}"
+                StrCpy $G_ChildHuman "Leia conversion"
+                StrCpy $G_ChildArgs  "/NOSTART"
+                Call RunChildInstaller
+                ${If} $0 != 0
+                    !insertmacro ChildFailed "Leia conversion" $0 0
+                ${EndIf}
+                Delete "$INSTDIR\${LEIACONV_EXE}"
+            ${Else}
+                !insertmacro UpgradeOrSkip $G_LeiaConvVer "${LEIACONV_VER}" "${LEIACONV_EXE}" "Leia conversion" "/NOSTART" 0
+            ${EndIf}
+        ${ElseIf} $G_LeiaConvInstalled == 1
+            DetailPrint "Removing Leia conversion..."
+            ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaConversion" "UninstallString"
+            ${If} $1 != ""
+                StrCpy $G_ChildRan 1
+                !insertmacro ExecChild '$1 /S'
+                !insertmacro ChildRemoved "Leia conversion" $0
+            ${EndIf}
+        ${EndIf}
+    SectionEnd
+!endif
 SectionGroupEnd
 
 SectionGroup /e "Conversion providers" SecGrpConversion
@@ -1354,6 +1473,10 @@ Function .onInit
     StrCpy $G_LeiaInstalled    0
     StrCpy $G_McpInstalled     0
     StrCpy $G_OpenConvInstalled 0
+!ifdef LEIACONV_EXE
+    StrCpy $G_LeiaConvInstalled 0
+    StrCpy $G_LeiaConvVer      ""
+!endif
     StrCpy $G_GaussInstalled   0
     StrCpy $G_ModelViewerInstalled 0
     StrCpy $G_MediaPlayerInstalled 0
@@ -1387,6 +1510,9 @@ Function .onInit
     !insertmacro ProbeAdd "DisplayXREarthView"
     !insertmacro ProbeAdd "DisplayXRLeiaSR"
     !insertmacro ProbeAdd "DisplayXROpenConversion"
+!ifdef LEIACONV_EXE
+    !insertmacro ProbeAdd "DisplayXRLeiaConversion"
+!endif
     Call ProbeContentAll
 
     ; Runtime is RO so its checkbox state can't be unset; still record
@@ -1456,7 +1582,49 @@ Function .onInit
     ${If} $0 != ""
         !insertmacro SelectSection ${SecOpenConv}
     ${EndIf}
+
+!ifdef LEIACONV_EXE
+    ; Leia conversion - default-checked with the plug-in it belongs to (every
+    ; section starts checked), pre-checked when already installed. Like the
+    ; plug-in it is inert without the display maker's own software. Its
+    ; installed version is the component's own marker,
+    ; HKLM\Software\DisplayXR\Plugins\LeiaConversion "Version" (the ARP
+    ; DisplayVersion carries the same value and is the fallback).
+    !insertmacro DetectComponent "DisplayXRLeiaConversion" $G_LeiaConvInstalled $G_LeiaConvVer "Leia conversion" 1
+    ${If} $0 != ""
+        !insertmacro SelectSection ${SecLeiaConv}
+    ${EndIf}
+    ${If} $G_LeiaConvInstalled == 1
+        ReadRegStr $1 HKLM "Software\DisplayXR\Plugins\LeiaConversion" "Version"
+        ${If} $1 != ""
+            StrCpy $G_LeiaConvVer $1
+        ${EndIf}
+    ${EndIf}
+!endif
 FunctionEnd
+
+!ifdef LEIACONV_EXE
+;--------------------------------
+; .onSelChange - "Leia conversion" is a sub-choice of "Leia SR plug-in".
+;
+; $0 is the index of the row the user just clicked (a group row for a group
+; click). The only state to repair is conversion checked + plug-in unchecked:
+;   the user ticked the conversion  -> tick the plug-in it needs;
+;   anything else (the plug-in or its group was unticked) -> untick the
+;   conversion, which the section then removes if it was installed.
+; Never fires in a silent run, where every section keeps its default (checked).
+;--------------------------------
+Function .onSelChange
+    ${If} ${SectionIsSelected} ${SecLeiaConv}
+    ${AndIfNot} ${SectionIsSelected} ${SecLeia}
+        ${If} $0 == ${SecLeiaConv}
+            !insertmacro SelectSection ${SecLeia}
+        ${Else}
+            !insertmacro UnselectSection ${SecLeiaConv}
+        ${EndIf}
+    ${EndIf}
+FunctionEnd
+!endif
 
 Function un.onInit
     SetRegView 64
@@ -1471,6 +1639,9 @@ LangString DESC_SecRuntime ${LANG_ENGLISH} "Core OpenXR runtime, service, and na
 LangString DESC_SecShell   ${LANG_ENGLISH} "Spatial workspace + window manager for 3D apps. Multi-app layouts, chrome, file picker."
 LangString DESC_SecMcp     ${LANG_ENGLISH} "Claude / AI control adapter for DisplayXR. Required for the displayxr-mcp Tools experience."
 LangString DESC_SecOpenConv ${LANG_ENGLISH} "Open-model 2D-to-3D conversion provider: depth from images and video on ONNX Runtime/DirectML, for displays without a vendor conversion module. Models download on first use."
+!ifdef LEIACONV_EXE
+LangString DESC_SecLeiaConv ${LANG_ENGLISH} "2D-to-3D conversion from the display maker. Needs the Leia conversion runtime, installed separately."
+!endif
 LangString DESC_SecLeia    ${LANG_ENGLISH} "Display processor plug-in for Leia SR 3D monitors. Safe to install on any PC: it stays inactive until the monitor's own platform software is installed (before or after DisplayXR)."
 LangString DESC_SecGauss   ${LANG_ENGLISH} "Sample 3D scene viewer (Gaussian splatting renderer). Standalone DisplayXR app."
 LangString DESC_SecModelViewer ${LANG_ENGLISH} "glTF 2.0 PBR model viewer (.glb/.gltf). Standalone DisplayXR app."
@@ -1483,6 +1654,9 @@ LangString DESC_SecEarthView ${LANG_ENGLISH} "Streaming 3D city viewer on Google
     !insertmacro MUI_DESCRIPTION_TEXT ${SecShell}   $(DESC_SecShell)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecMcp}     $(DESC_SecMcp)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecLeia}    $(DESC_SecLeia)
+!ifdef LEIACONV_EXE
+    !insertmacro MUI_DESCRIPTION_TEXT ${SecLeiaConv} $(DESC_SecLeiaConv)
+!endif
     !insertmacro MUI_DESCRIPTION_TEXT ${SecOpenConv} $(DESC_SecOpenConv)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecGauss}   $(DESC_SecGauss)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecModelViewer} $(DESC_SecModelViewer)
@@ -1507,7 +1681,7 @@ LangString DESC_SecEarthView ${LANG_ENGLISH} "Streaming 3D city viewer on Google
 ; bundle must not rely on it to remove a plug-in.
 ;
 ; Walk each child's UninstallString in reverse install order
-; (EarthView → Avatar → MediaPlayer → ModelViewer → Gauss → Open Conversion → MCP → Leia SR → Shell → Runtime). Runtime last so its
+; (EarthView → Avatar → MediaPlayer → ModelViewer → Gauss → Open Conversion → MCP → Leia conversion → Leia SR → Shell → Runtime). Runtime last so its
 ; DeleteRegKey /ifempty Software\DisplayXR cleanup catches any orphan
 ; subkeys (per PR DisplayXR/displayxr-runtime#291 fix #4). The chain
 ; gracefully skips any child whose ARP key is absent — covers
@@ -1582,6 +1756,19 @@ Section "Uninstall"
         !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}
+
+!ifdef LEIACONV_EXE
+    ; -- Leia conversion --
+    ; Only in a bundle that chains it: a bundle that never installed the
+    ; component leaves a copy the user installed separately alone.
+    ClearErrors
+    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaConversion" "UninstallString"
+    ${If} $ChildUninstall != ""
+        DetailPrint "Uninstalling Leia conversion..."
+        !insertmacro ExecChild '$ChildUninstall /S'
+        DetailPrint "  exit code: $0"
+    ${EndIf}
+!endif
 
     ; -- Leia SR Plug-in --
     ClearErrors

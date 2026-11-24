@@ -26,6 +26,22 @@
     with the reason, and reported as skipped rather than passed over in
     silence. An unlisted pin still fails, which is the point of the guard.
 
+    One pin is CONDITIONALLY bundled: leia_conversion (the Leia conversion
+    component). The rule is scripts/leia_conversion_gate.ps1:
+
+      leia_plugin >= the gate version  -> it MUST be chained (it is treated
+                                          like any other component below);
+      leia_plugin <  the gate version  -> it must NOT be chained (reported as
+                                          skipped, with the reason).
+
+    The state flips when the runtime mirrors a new leia_plugin pin into
+    versions.json - a commit no PR in this repo reviews. So the wiring is
+    checked in BOTH states: the build scripts and the .nsi must already carry
+    the gated component, and the three copies of the gate version (the .ps1,
+    scripts/lib/leia-conversion-gate.sh, LEIACONV_MIN_LEIA_VER in the .nsi)
+    must be equal. Otherwise the day the plug-in pin moves, the bundle would
+    quietly ship without the component.
+
     Exit 0 when every component is chained on both platforms; exit 1 (listing
     the orphans per platform) otherwise.
 #>
@@ -34,8 +50,14 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionsPath = Join-Path $repoRoot 'versions.json'
-$batPath = Join-Path $repoRoot 'scripts\build-bundle.bat'
-$shPath  = Join-Path $repoRoot 'scripts\build-bundle.sh'
+$batPath = Join-Path $repoRoot 'scripts/build-bundle.bat'
+$shPath  = Join-Path $repoRoot 'scripts/build-bundle.sh'
+$linuxPath   = Join-Path $repoRoot 'scripts/build-bundle-linux.sh'
+$gateShPath  = Join-Path $repoRoot 'scripts/lib/leia-conversion-gate.sh'
+$nsiPath     = Join-Path $repoRoot 'installer/windows/DisplayXRBundleInstaller.nsi'
+
+# Defines $LeiaConversionMinPlugin and Test-LeiaConversionChained.
+. (Join-Path $PSScriptRoot 'leia_conversion_gate.ps1')
 
 if (-not (Test-Path $versionsPath)) { Write-Error "versions.json not found at $versionsPath"; exit 1 }
 if (-not (Test-Path $batPath))      { Write-Error "build-bundle.bat not found at $batPath"; exit 1 }
@@ -44,6 +66,12 @@ if (-not (Test-Path $shPath))       { Write-Error "build-bundle.sh not found at 
 $versions = Get-Content -Raw $versionsPath | ConvertFrom-Json
 $bat = Get-Content -Raw $batPath
 $sh  = Get-Content -Raw $shPath
+foreach ($p in @($linuxPath, $gateShPath, $nsiPath)) {
+    if (-not (Test-Path $p)) { Write-Error "$p not found"; exit 1 }
+}
+$linux  = Get-Content -Raw $linuxPath
+$gateSh = Get-Content -Raw $gateShPath
+$nsi    = Get-Content -Raw $nsiPath
 
 # Pins that are deliberately NOT chained by the bundle. Being in versions.json
 # only means setup-displayxr can install the component from a released asset;
@@ -53,8 +81,25 @@ $sh  = Get-Content -Raw $shPath
 $IntentionallyUnbundled = @{
     browser = 'Opt-in only (setup-displayxr --with browser): a full standalone browser is something a user asks for, not part of the display stack the default install lays down, so it must not ride the default install. Enrolling it in the default install / the desktop bundle is a separate decision (browser-pvt#120 D4). Its tags are vX.Y.Z from v1.0.0, validated by versions-bump like every other component.'
       cnsdk_services = 'Android only, and not installable by setup-displayxr at all: it pins the pair of CNSDK display-service APKs on the PRIVATE repo LeiaInc/CNSDK, fetched with LEIALOFT_GITHUB_TOKEN by build-android-bundle.yml to assemble the Android tablet bundle. The desktop bundle is Windows/macOS installers and has no Android lane to chain it into. This is the pin that made versions.json membership mean "desktop orchestrator installs it OR a platform bundle pins it".'
-    leia_conversion = 'NOT RELEASED YET (the key is absent from versions.json until the component''s first release adds it; it is listed here ahead of that so the mirrored file does not fail this check on the day it appears). Leia 2D-to-3D conversion provider, DisplayXR/displayxr-leia-conversion, split out of the Leia SR plug-in. Opt-in (setup-displayxr --with leia-conversion): it needs the NeurD runtime, which has its own installer and licence and is never fetched by DisplayXR. The vendor-neutral bundle stops carrying vendor providers (runtime ADR-064 section 8): a provider is offered from the signed catalog and downloaded, not embedded. An offline bundle may embed it on request; see displayxr-runtime docs/roadmap/catalog-driven-bundle.md.'
+    leia_conversion = "CONDITIONAL, and not chained by this bundle: the pinned Leia SR plug-in (leia_plugin) is older than v$LeiaConversionMinPlugin and still carries the conversion provider itself, so its installer would take the provider registration back from the component (Windows) and the two packages conflict (Linux). The component is wired into every build script behind scripts/leia_conversion_gate.ps1 and is chained - and required - from the first bundle whose leia_plugin pin is >= v$LeiaConversionMinPlugin. Until then: setup-displayxr --with leia-conversion. It needs the display maker's conversion runtime, which has its own installer and is never fetched by DisplayXR."
     ultraleap = 'NOT RELEASED YET (same as the entry above: listed ahead of the key). Ultraleap hands input provider, DisplayXR/displayxr-ultraleap, moved out of the runtime trunk. Opt-in (setup-displayxr --with ultraleap): it needs the Ultraleap tracking software and a camera, and a build installs only on the one runtime release it was built at (runtime ADR-063), so a bundle that pins a newer runtime could not install it anyway. Offered from the signed catalog, with its exact runtime range, never embedded by default.'
+}
+
+# leia_conversion is unbundled only while the gate says "skip". Once the
+# plug-in pin reaches the gate version it leaves the table and is held to the
+# same "chained by both build scripts" check as every other component.
+$leiaPluginPin = $versions.leia_plugin
+if (-not $leiaPluginPin) { Write-Error "versions.json has no 'leia_plugin' pin"; exit 1 }
+$leiaConvChained = Test-LeiaConversionChained $leiaPluginPin
+if ($leiaConvChained) {
+    $IntentionallyUnbundled.Remove('leia_conversion')
+    if (-not $versions.leia_conversion) {
+        Write-Host "ERROR: leia_plugin $leiaPluginPin no longer carries the conversion provider, so the bundle must chain leia_conversion - but versions.json has no 'leia_conversion' pin." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "GATE: leia_plugin $leiaPluginPin >= v$LeiaConversionMinPlugin - leia_conversion MUST be chained."
+} else {
+    Write-Host "GATE: leia_plugin $leiaPluginPin < v$LeiaConversionMinPlugin - leia_conversion must NOT be chained."
 }
 
 # Every property except the JSON-schema pointer is a pinned component.
@@ -74,6 +119,46 @@ foreach ($c in $components) {
 }
 
 $failed = $false
+
+# --- leia_conversion wiring, checked in both gate states ---------------------
+$wiring = @()
+if ($bat -notmatch [regex]::Escape('COMPONENT_REPO_leia_conversion='))   { $wiring += 'build-bundle.bat has no COMPONENT_REPO_leia_conversion= entry' }
+if ($bat -notmatch [regex]::Escape('leia_conversion_gate.ps1'))          { $wiring += 'build-bundle.bat does not call scripts\leia_conversion_gate.ps1' }
+if ($bat -notmatch [regex]::Escape('/DLEIACONV_EXE='))                   { $wiring += 'build-bundle.bat never passes /DLEIACONV_EXE to makensis' }
+if ($sh  -notmatch 'process_component\s+leia_conversion\b')               { $wiring += 'build-bundle.sh has no gated `process_component leia_conversion` call' }
+if ($sh  -notmatch [regex]::Escape('leia-conversion-gate.sh'))           { $wiring += 'build-bundle.sh does not source scripts/lib/leia-conversion-gate.sh' }
+if ($linux -notmatch [regex]::Escape('leia-conversion-gate.sh'))         { $wiring += 'build-bundle-linux.sh does not source scripts/lib/leia-conversion-gate.sh' }
+if ($linux -notmatch 'COMPONENTS\+=\(leia_conversion\)')                 { $wiring += 'build-bundle-linux.sh never adds leia_conversion to COMPONENTS' }
+if ($nsi -notmatch '(?m)^\s*Section\s+"Leia conversion"\s+SecLeiaConv')  { $wiring += 'the bundle .nsi has no "Leia conversion" section (SecLeiaConv)' }
+if ($nsi -notmatch '(?m)^!ifdef LEIACONV_EXE')                           { $wiring += 'the bundle .nsi does not gate the section on LEIACONV_EXE' }
+
+# The section must come after the plug-in's: the handover depends on the order.
+$iLeia = $nsi.IndexOf('Section "Leia SR plug-in" SecLeia')
+$iConv = $nsi.IndexOf('Section "Leia conversion" SecLeiaConv')
+if ($iLeia -ge 0 -and $iConv -ge 0 -and $iConv -lt $iLeia) { $wiring += 'the "Leia conversion" section is declared BEFORE "Leia SR plug-in" (it must run after it)' }
+
+# One gate version, three copies.
+$shMin  = if ($gateSh -match '(?m)^LEIA_CONVERSION_MIN_PLUGIN="([^"]+)"') { $Matches[1] } else { '<missing>' }
+$nsiMin = if ($nsi    -match '(?m)^!define LEIACONV_MIN_LEIA_VER "([^"]+)"') { $Matches[1] } else { '<missing>' }
+if ($shMin -ne $LeiaConversionMinPlugin -or $nsiMin -ne $LeiaConversionMinPlugin) {
+    $wiring += "the gate version differs: leia_conversion_gate.ps1=$LeiaConversionMinPlugin, leia-conversion-gate.sh=$shMin, .nsi LEIACONV_MIN_LEIA_VER=$nsiMin"
+}
+
+# User-facing bundle text names the component "Leia conversion" and its
+# prerequisite "the Leia conversion runtime"; the vendor's technology name
+# stays out of the installer UI and the Linux bundle's scripts and README.
+$tech = 'Neur' + 'D'
+foreach ($f in @($nsiPath, $linuxPath) + @(Get-ChildItem (Join-Path $repoRoot 'installer/linux') -File | ForEach-Object { $_.FullName })) {
+    if ((Get-Content -Raw $f) -match $tech) { $wiring += "$f names the vendor conversion technology in user-facing bundle text" }
+}
+
+if ($wiring.Count -gt 0) {
+    $failed = $true
+    Write-Host "ERROR: the Leia conversion component is not wired the way the gate needs:" -ForegroundColor Red
+    foreach ($w in $wiring) { Write-Host "  - $w" -ForegroundColor Red }
+    Write-Host "  See scripts/leia_conversion_gate.ps1 for the rule."
+}
+
 if ($winOrphans.Count -gt 0) {
     $failed = $true
     Write-Host "ERROR: versions.json pins components the WINDOWS bundle does not chain:" -ForegroundColor Red

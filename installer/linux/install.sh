@@ -4,6 +4,10 @@
 # Installs the DisplayXR stack from the .debs bundled alongside this script:
 #   - displayxr-runtime  (OpenXR runtime + sim-display fallback DP)
 #   - displayxr-leia-sr  (Leia SR display-processor plug-in, probe_order 50)
+#   - displayxr-leia-conversion  (2D-to-3D conversion from the display maker) —
+#     in the bundle from the first plug-in release that no longer carries the
+#     conversion provider itself. It needs the Leia conversion runtime, which is
+#     installed separately and is never part of this bundle.
 #
 # After install the box needs ZERO environment variables: the runtime .deb
 # registers the OpenXR ActiveRuntime and searches /usr/lib/displayxr/plugins by
@@ -57,6 +61,12 @@ for d in "${DEBS[@]}"; do echo "      $(basename "$d")"; done
 # `Recommends: leiasr-runtime` is best-effort — pulled if a Leia apt repo is
 # configured, silently skipped otherwise (the commercial SR runtime is not in
 # public apt). Either way the stack installs.
+#
+# ONE transaction, on purpose: every bundled .deb goes to a single apt-get call.
+# displayxr-leia-conversion declares Breaks/Replaces against every
+# displayxr-leia-sr that still shipped the conversion provider, so on a box with
+# such a plug-in installed the two must be upgraded together — installed one at
+# a time, apt refuses the conversion package. Do not split this into a loop.
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq || true
 apt-get install -y "${DEBS[@]}"
@@ -83,6 +93,14 @@ else
     echo " no environment variables."
 fi
 echo "======================================================================"
+
+# --- Leia conversion ----------------------------------------------------------
+if dpkg -s displayxr-leia-conversion >/dev/null 2>&1; then
+    echo ""
+    echo " Leia conversion (2D-to-3D conversion from the display maker) is installed."
+    echo " It needs the Leia conversion runtime, installed separately; until that is"
+    echo " present, DisplayXR uses its next conversion provider."
+fi
 
 # --- Verify -------------------------------------------------------------------
 echo ""

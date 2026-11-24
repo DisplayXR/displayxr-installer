@@ -4,7 +4,7 @@ Project guidance for Claude Code (claude.ai/code) when working in this repo.
 
 ## What this repo is
 
-`displayxr-installer` produces the **end-user meta-installer** for DisplayXR — one `.exe` / `.pkg` per OS that chains every component installer (runtime + Shell + Leia plug-in + MCP Tools + Open Conversion provider + demos) into a single guided flow.
+`displayxr-installer` produces the **end-user meta-installer** for DisplayXR — one `.exe` / `.pkg` per OS that chains every component installer (runtime + Shell + Leia plug-in + Leia conversion (gated, below) + MCP Tools + Open Conversion provider + demos) into a single guided flow.
 
 Tracks issue [`DisplayXR/displayxr-runtime#284`](https://github.com/DisplayXR/displayxr-runtime/issues/284).
 
@@ -30,8 +30,12 @@ displayxr-installer/
 ├── scripts/
 │   ├── build-bundle.sh                        ← macOS: productbuild
 │   ├── build-bundle.bat                       ← Windows: makensis
+│   ├── build-bundle-linux.sh                  ← Linux: .debs + install.sh in a tarball
+│   ├── check_bundle_coverage.ps1              ← every pin is chained, or unbundled for a stated reason
+│   ├── leia_conversion_gate.ps1               ← when the bundle chains leia_conversion (Windows + coverage check)
 │   └── lib/
-│       └── fetch-components.sh                ← curls runtime repo's components.sh at $RUNTIME_TAG
+│       ├── fetch-components.sh                ← curls runtime repo's components.sh at $RUNTIME_TAG
+│       └── leia-conversion-gate.sh            ← the same rule for the bash build scripts
 └── .github/workflows/
     ├── publish-bundle.yml                     ← workflow_dispatch, releases the bundle
     └── build-bundle.yml                       ← per-PR validation
@@ -46,6 +50,7 @@ displayxr-installer/
 | `DisplayXR/displayxr-shell-releases` | `DisplayXRShellSetup-*.exe` (Windows) | `gh release download $SHELL_TAG --repo ...` |
 | `DisplayXR/displayxr-leia-plugin` | `DisplayXRLeiaSRSetup-*.exe` (Windows) | `gh release download $LEIA_TAG --repo ...` |
 | `DisplayXR/displayxr-mcp` | `DisplayXRMCPSetup-*.exe` (Windows) | `gh release download $MCP_TAG --repo ...` |
+| `DisplayXR/displayxr-leia-conversion` | `DisplayXRLeiaConversionSetup-*.exe` (Windows), `displayxr-leia-conversion_*_amd64.deb` (Linux) — **only when `leia_plugin` ≥ v2.24.0** | `gh release download $LEIACONV_TAG --repo ...` |
 
 Components without a macOS `.pkg` today (Shell, Leia, MCP) are silently skipped on the macOS side. The bundle build picks them up automatically when their releases start carrying `.pkg` artifacts and the runtime repo's `components.sh` populates `COMPONENT_PKG_MACOS_<name>`.
 
@@ -104,6 +109,31 @@ yet is listed there **before** its first release: the runtime adds such a key to
 on that first release and mirrors it here in the same run (`leia_conversion`, `ultraleap`).
 Where the bundle is going (a core bundle that downloads catalog components, plus an offline
 full bundle): `displayxr-runtime/docs/roadmap/catalog-driven-bundle.md`.
+
+**`leia_conversion` is conditionally bundled — the one pin whose state depends on another pin.**
+The Leia SR plug-in carried the conversion provider up to 2.23.x; from 2.24.0 it does not and the
+provider ships only as the `leia_conversion` component. The rule (one version, three copies:
+`scripts/leia_conversion_gate.ps1`, `scripts/lib/leia-conversion-gate.sh`, `LEIACONV_MIN_LEIA_VER`
+in the `.nsi`; the coverage check fails when they differ):
+
+| `leia_plugin` pin | `leia_conversion` | Enforced by |
+|---|---|---|
+| < v2.24.0 | must NOT be chained: the old plug-in installer takes the provider registration back (Windows), and the component's `.deb` declares `Breaks`/`Replaces` against it (Linux) | build scripts skip it; the `.nsi` has an `!error`, `build-bundle-linux.sh` exits 1 if it is chained anyway; coverage check reports it as skipped |
+| ≥ v2.24.0 | MUST be chained, or a display that had conversion loses it on upgrade | build scripts download + chain it and fail without it; coverage check treats it like every other component |
+
+The flip happens through a `versions.json` mirror commit that no PR here reviews, so the coverage
+check verifies the wiring in **both** states. Things that are load-bearing:
+
+- **Windows order:** the `Leia conversion` section is declared after `Leia SR plug-in` and must
+  stay there (the plug-in installer removes its leftover provider copy, then the component writes
+  its own registration). The section also re-runs the component installer when it is installed and
+  current but not the *registered* provider — a version compare alone would skip it.
+- **Sub-choice:** `.onSelChange` keeps it unticked whenever the plug-in is unticked.
+- **Linux:** `install.sh` hands every `.deb` to ONE `apt-get install`; do not turn that into a
+  loop, or apt refuses the component over an installed older plug-in.
+- **User-facing text** says "Leia conversion" and "the Leia conversion runtime"; the vendor's
+  technology name stays out of the installer UI and the Linux bundle's scripts (coverage check).
+- The bundle never installs the vendor's conversion runtime. macOS has no build of the component.
 
 Full design rationale:
 [`displayxr-runtime/docs/specs/runtime/versions-json-autobump.md`](https://github.com/DisplayXR/displayxr-runtime/blob/main/docs/specs/runtime/versions-json-autobump.md).

@@ -67,6 +67,7 @@ SHELL_TAG="$(jq -r '.shell' "$REPO_ROOT/versions.json")"
 LEIA_TAG="$(jq -r '.leia_plugin' "$REPO_ROOT/versions.json")"
 MCP_TAG="$(jq -r '.mcp_tools' "$REPO_ROOT/versions.json")"
 OPENCONV_TAG="$(jq -r '.conversion_open' "$REPO_ROOT/versions.json")"
+LEIACONV_TAG="$(jq -r '.leia_conversion // ""' "$REPO_ROOT/versions.json")"
 GAUSS_TAG="$(jq -r '.gauss_demo' "$REPO_ROOT/versions.json")"
 MODELVIEWER_TAG="$(jq -r '.modelviewer_demo' "$REPO_ROOT/versions.json")"
 MEDIAPLAYER_TAG="$(jq -r '.mediaplayer_demo' "$REPO_ROOT/versions.json")"
@@ -81,6 +82,7 @@ cat <<EOF
     leia_plugin: $LEIA_TAG
     mcp_tools:   $MCP_TAG
     conversion_open: $OPENCONV_TAG
+    leia_conversion: ${LEIACONV_TAG:-<no pin>}
     gauss_demo:  $GAUSS_TAG
     modelviewer: $MODELVIEWER_TAG
     mediaplayer: $MEDIAPLAYER_TAG
@@ -151,8 +153,8 @@ process_component() {
         earthview_demo)
             extract_earthview_demo "$expanded"
             ;;
-        shell|leia_plugin|mcp_tools|conversion_open)
-            # Future: shell/leia-plugin/mcp/open-conversion don't ship macOS .pkg today. When
+        shell|leia_plugin|mcp_tools|conversion_open|leia_conversion)
+            # Future: shell/leia-plugin/mcp/open-conversion/leia-conversion don't ship macOS .pkg today. When
             # they do, add extract_$name like extract_runtime — most
             # will look the same (one component .pkg inside, one
             # <choice>/<pkg-ref> pair).
@@ -315,6 +317,18 @@ process_component mcp_tools   "$MCP_TAG"
 # today, no macOS .pkg, so this skips until the runtime table grows a
 # PKG_MACOS glob for it.
 process_component conversion_open "$OPENCONV_TAG"
+# Leia conversion: chained from the first Leia SR plug-in release that no longer
+# carries the conversion provider (scripts/lib/leia-conversion-gate.sh). It has
+# no macOS build, so even then process_component skips it here; the call keeps
+# the three platforms' component sets in step (check_bundle_coverage.ps1).
+# shellcheck source=scripts/lib/leia-conversion-gate.sh
+source "$REPO_ROOT/scripts/lib/leia-conversion-gate.sh"
+gate_rc=0; leia_conversion_chained "$LEIA_TAG" || gate_rc=$?
+case "$gate_rc" in
+    0) process_component leia_conversion "$LEIACONV_TAG" ;;
+    1) echo "==> [leia_conversion] not chained: leia_plugin $LEIA_TAG < v$LEIA_CONVERSION_MIN_PLUGIN still carries the conversion provider" ;;
+    *) echo "ERROR: cannot decide whether to chain leia_conversion (see above)." >&2; exit 1 ;;
+esac
 # Demos go after core components in the install UI. All ship a macOS
 # .pkg (gauss, model viewer, media player, avatar). process_component gracefully
 # skips any whose runtime components.sh table has an empty PKG_MACOS glob,
