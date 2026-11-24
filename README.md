@@ -1,6 +1,6 @@
 # displayxr-installer
 
-End-user meta-installer for [DisplayXR](https://github.com/DisplayXR/displayxr-runtime) — a single `.exe` / `.pkg` bundle that chains the OpenXR runtime, Shell, Leia SR plug-in, MCP Tools, and the open-model conversion provider into one guided install.
+End-user meta-installer for [DisplayXR](https://github.com/DisplayXR/displayxr-runtime) — a single `.exe` / `.pkg` bundle that chains the OpenXR runtime, Shell, Leia SR plug-in (and, once the plug-in no longer carries it, the Leia conversion component), MCP Tools, and the open-model conversion provider into one guided install.
 
 Tracks issue [`DisplayXR/displayxr-runtime#284`](https://github.com/DisplayXR/displayxr-runtime/issues/284).
 
@@ -28,6 +28,7 @@ Version 1 of the bundle ships unsigned. SmartScreen / Gatekeeper show a one-time
 | DisplayXR Runtime | ✅ | ✅ | ✅ |
 | DisplayXR Shell | — (Windows-only today) | ✅ | — |
 | Leia SR Plug-in | — (Windows-only, vendor SDK) | ✅ | ✅ |
+| Leia conversion (2D→3D conversion from the display maker) | — (no macOS build) | ⏳ from the first bundle whose Leia SR plug-in is ≥ 2.24.0 | ⏳ same rule |
 | MCP Tools | — (Windows-only today) | ✅ | — |
 | Open Conversion provider (open-model 2D→3D) | — (no macOS build today) | ✅ | ⏳ ships a per-user tarball, not a `.deb` |
 | Demos (gauss, model viewer, media player, avatar, earthview) | ✅ | ✅ | ⏳ join when they ship a Linux `.deb` |
@@ -35,6 +36,17 @@ Version 1 of the bundle ships unsigned. SmartScreen / Gatekeeper show a one-time
 macOS users get a runtime-only install today; additional components join the bundle as they publish `.pkg` artifacts.
 
 The exact version pins for each release live in [`versions.json`](versions.json) at the tagged commit.
+
+### Leia conversion: chained with the plug-in that stops carrying it
+
+Up to its 2.23.x line the Leia SR plug-in installs the display maker's 2D→3D conversion provider itself. From plug-in 2.24.0 it does not, and the provider ships only as the separate **Leia conversion** component ([`displayxr-leia-conversion`](https://github.com/DisplayXR/displayxr-leia-conversion), pinned as `leia_conversion`). The bundle switches with the plug-in pin, in one step:
+
+| `leia_plugin` pin | Bundle | Why |
+|---|---|---|
+| < v2.24.0 | does **not** chain `leia_conversion` (a build that tries fails) | that plug-in still writes the provider registration and would take it back from the component (Windows); the two `.deb`s conflict (Linux) |
+| ≥ v2.24.0 | chains `leia_conversion`, and **requires** it | without it a display that had conversion loses it on upgrade |
+
+On Windows it is the **Leia conversion** row under *Vendor plug-ins*: a sub-choice of *Leia SR plug-in* (unticking the plug-in unticks it), installed right after the plug-in. On Linux its `.deb` is installed in the same `apt-get` transaction as the plug-in's. It needs the Leia conversion runtime, which the display maker ships with its own installer — the bundle never installs it. The rule lives in `scripts/leia_conversion_gate.ps1` / `scripts/lib/leia-conversion-gate.sh`; `scripts/check_bundle_coverage.ps1` holds the bundle to it in both states.
 
 ## Linux bundle
 
@@ -54,7 +66,7 @@ sha256sum -c SHA256SUMS --ignore-missing   # checks only the assets you download
 
 `SHA256SUMS` covers every bundle asset (`.exe`, `.pkg`, `.tar.gz`, `.apk`); the `.exe` line matches the **signed** installer.
 
-It installs the DisplayXR runtime + Leia SR display-processor plug-in with **zero environment variables** — the runtime registers the OpenXR ActiveRuntime and searches `/usr/lib/displayxr/plugins` by default. Without the **Leia SR runtime** (the commercial `leiasr-runtime` package, shipped separately by Leia — **not** in this bundle) apps run on the built-in sim-display fallback; install it and the Leia display processor claims the display automatically. `install.sh` detects it and guides you.
+It installs the DisplayXR runtime + Leia SR display-processor plug-in (+ the Leia conversion component, [when the plug-in no longer carries it](#leia-conversion-chained-with-the-plug-in-that-stops-carrying-it)) with **zero environment variables** — the runtime registers the OpenXR ActiveRuntime and searches `/usr/lib/displayxr/plugins` by default. Without the **Leia SR runtime** (the commercial `leiasr-runtime` package, shipped separately by Leia — **not** in this bundle) apps run on the built-in sim-display fallback; install it and the Leia display processor claims the display automatically. `install.sh` detects it and guides you.
 
 Demos are **not** included on Linux yet — they ship Windows `.exe` / macOS `.pkg` today but no Linux `.deb`. `build-bundle-linux.sh` already loops over them and will pull each one in automatically once its repo publishes a `*_amd64.deb` release asset (and `components.sh` gains its `DEB_LINUX` glob). Tracks [`DisplayXR/displayxr-runtime#781`](https://github.com/DisplayXR/displayxr-runtime/issues/781).
 

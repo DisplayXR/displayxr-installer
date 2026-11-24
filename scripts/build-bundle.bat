@@ -98,6 +98,13 @@ set "COMPONENT_EXE_mcp_tools=DisplayXRMCPSetup-*.exe"
 set "COMPONENT_REPO_conversion_open=DisplayXR/displayxr-conversion-open"
 set "COMPONENT_EXE_conversion_open=DisplayXROpenConversionSetup-*.exe"
 
+:: Leia conversion provider (2D-to-3D conversion from the display maker):
+:: registers HKLM\Software\DisplayXR\ConversionProviders\leia-conversion.
+:: Chained ONLY when the pinned Leia SR plug-in no longer carries the provider
+:: itself - see the gate below and scripts\leia_conversion_gate.ps1.
+set "COMPONENT_REPO_leia_conversion=DisplayXR/displayxr-leia-conversion"
+set "COMPONENT_EXE_leia_conversion=DisplayXRLeiaConversionSetup-*.exe"
+
 set "COMPONENT_REPO_gauss_demo=DisplayXR/displayxr-demo-gaussiansplat"
 set "COMPONENT_EXE_gauss_demo=DisplayXRGaussianSplatSetup-*.exe"
 
@@ -123,6 +130,7 @@ call :read_pin shell       SHELL_TAG
 call :read_pin leia_plugin LEIA_TAG
 call :read_pin mcp_tools   MCP_TAG
 call :read_pin conversion_open OPENCONV_TAG
+call :read_pin leia_conversion LEIACONV_TAG
 call :read_pin gauss_demo  GAUSS_TAG
 call :read_pin modelviewer_demo MODELVIEWER_TAG
 call :read_pin mediaplayer_demo MEDIAPLAYER_TAG
@@ -140,6 +148,23 @@ if "%MEDIAPLAYER_TAG%"=="" ( echo ERROR: versions.json missing 'mediaplayer_demo
 if "%AVATAR_TAG%"=="" ( echo ERROR: versions.json missing 'avatar_demo' pin & exit /b 1 )
 if "%EARTHVIEW_TAG%"=="" ( echo ERROR: versions.json missing 'earthview_demo' pin & exit /b 1 )
 
+:: --- Leia conversion gate ---
+:: leia_plugin >= 2.24.0 (the first plug-in release WITHOUT the conversion
+:: provider): chain leia_conversion, and require it - without it a display that
+:: had conversion loses it on upgrade.
+:: leia_plugin older: do NOT chain it - that plug-in installer still writes the
+:: provider registration itself and would take it back from the component.
+:: The rule (and the version) is in scripts\leia_conversion_gate.ps1; the .nsi
+:: refuses to compile the component in next to an older plug-in.
+set "LEIACONV_CHAIN="
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\leia_conversion_gate.ps1" -PluginTag "%LEIA_TAG%"`) do set "LEIACONV_CHAIN=%%i"
+if /i "%LEIACONV_CHAIN%"=="chain" goto :leiaconv_gate_done
+if /i "%LEIACONV_CHAIN%"=="skip"  goto :leiaconv_gate_done
+echo ERROR: cannot decide whether to chain leia_conversion ^(leia_plugin pin '%LEIA_TAG%', gate said '%LEIACONV_CHAIN%'^)
+exit /b 1
+:leiaconv_gate_done
+if /i "%LEIACONV_CHAIN%"=="chain" if "%LEIACONV_TAG%"=="" ( echo ERROR: leia_plugin %LEIA_TAG% no longer carries the conversion provider, so the bundle must chain leia_conversion - but versions.json has no 'leia_conversion' pin & exit /b 1 )
+
 :: --- Bare versions for the NSI version-compare gate (#346) ---
 :: Strip the leading 'v' from each pin so it matches the 3-part DisplayVersion
 :: each component writes to its ARP key (e.g. v1.5.3 -> 1.5.3). The bundle NSI
@@ -150,6 +175,7 @@ set "SHELL_VER=%SHELL_TAG%"
 set "LEIA_VER=%LEIA_TAG%"
 set "MCP_VER=%MCP_TAG%"
 set "OPENCONV_VER=%OPENCONV_TAG%"
+set "LEIACONV_VER=%LEIACONV_TAG%"
 set "GAUSS_VER=%GAUSS_TAG%"
 set "MODELVIEWER_VER=%MODELVIEWER_TAG%"
 set "MEDIAPLAYER_VER=%MEDIAPLAYER_TAG%"
@@ -160,6 +186,7 @@ if /i "%SHELL_VER:~0,1%"=="v"   set "SHELL_VER=%SHELL_VER:~1%"
 if /i "%LEIA_VER:~0,1%"=="v"    set "LEIA_VER=%LEIA_VER:~1%"
 if /i "%MCP_VER:~0,1%"=="v"     set "MCP_VER=%MCP_VER:~1%"
 if /i "%OPENCONV_VER:~0,1%"=="v" set "OPENCONV_VER=%OPENCONV_VER:~1%"
+if not "%LEIACONV_VER%"=="" if /i "%LEIACONV_VER:~0,1%"=="v" set "LEIACONV_VER=%LEIACONV_VER:~1%"
 if /i "%GAUSS_VER:~0,1%"=="v"   set "GAUSS_VER=%GAUSS_VER:~1%"
 if /i "%MODELVIEWER_VER:~0,1%"=="v" set "MODELVIEWER_VER=%MODELVIEWER_VER:~1%"
 if /i "%MEDIAPLAYER_VER:~0,1%"=="v" set "MEDIAPLAYER_VER=%MEDIAPLAYER_VER:~1%"
@@ -173,6 +200,8 @@ echo     shell:       %SHELL_TAG%
 echo     leia_plugin: %LEIA_TAG%
 echo     mcp_tools:   %MCP_TAG%
 echo     conversion_open: %OPENCONV_TAG%
+if /i "%LEIACONV_CHAIN%"=="chain" echo     leia_conversion: %LEIACONV_TAG%
+if /i "%LEIACONV_CHAIN%"=="skip"  echo     leia_conversion: not chained ^(leia_plugin %LEIA_TAG% still carries the conversion provider^)
 echo     gauss_demo:  %GAUSS_TAG%
 echo     modelviewer: %MODELVIEWER_TAG%
 echo     mediaplayer: %MEDIAPLAYER_TAG%
@@ -185,6 +214,7 @@ call :download_component shell       %SHELL_TAG%   || exit /b 1
 call :download_component leia_plugin %LEIA_TAG%    || exit /b 1
 call :download_component mcp_tools   %MCP_TAG%     || exit /b 1
 call :download_component conversion_open %OPENCONV_TAG% || exit /b 1
+if /i "%LEIACONV_CHAIN%"=="chain" call :download_component leia_conversion %LEIACONV_TAG% || exit /b 1
 call :download_component gauss_demo  %GAUSS_TAG%   || exit /b 1
 call :download_component modelviewer_demo %MODELVIEWER_TAG% || exit /b 1
 call :download_component mediaplayer_demo %MEDIAPLAYER_TAG% || exit /b 1
@@ -197,6 +227,8 @@ call :find_exe shell       SHELL_EXE_FILE   || exit /b 1
 call :find_exe leia_plugin LEIA_EXE_FILE    || exit /b 1
 call :find_exe mcp_tools   MCP_EXE_FILE     || exit /b 1
 call :find_exe conversion_open OPENCONV_EXE_FILE || exit /b 1
+set "LEIACONV_EXE_FILE="
+if /i "%LEIACONV_CHAIN%"=="chain" call :find_exe leia_conversion LEIACONV_EXE_FILE || exit /b 1
 call :find_exe gauss_demo  GAUSS_EXE_FILE   || exit /b 1
 call :find_exe modelviewer_demo MODELVIEWER_EXE_FILE || exit /b 1
 call :find_exe mediaplayer_demo MEDIAPLAYER_EXE_FILE || exit /b 1
@@ -211,6 +243,7 @@ copy /Y "%STAGE%\shell\%SHELL_EXE_FILE%"            "%BUNDLE_STAGE%\" >nul || ex
 copy /Y "%STAGE%\leia_plugin\%LEIA_EXE_FILE%"       "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\mcp_tools\%MCP_EXE_FILE%"          "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\conversion_open\%OPENCONV_EXE_FILE%" "%BUNDLE_STAGE%\" >nul || exit /b 1
+if /i "%LEIACONV_CHAIN%"=="chain" copy /Y "%STAGE%\leia_conversion\%LEIACONV_EXE_FILE%" "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\gauss_demo\%GAUSS_EXE_FILE%"       "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\modelviewer_demo\%MODELVIEWER_EXE_FILE%" "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\mediaplayer_demo\%MEDIAPLAYER_EXE_FILE%" "%BUNDLE_STAGE%\" >nul || exit /b 1
@@ -220,6 +253,11 @@ copy /Y "%REPO_ROOT%\LICENSE"                       "%BUNDLE_STAGE%\" >nul || ex
 
 :: --- Invoke makensis ---
 echo ==^> makensis -^> %OUT_DIR%\DisplayXRBundle-%BUNDLE_VERSION%.exe
+
+:: Leia conversion: its two defines are passed only when the gate chained it.
+:: Without LEIACONV_EXE the .nsi compiles the section out entirely.
+set "LEIACONV_DEFS="
+if /i "%LEIACONV_CHAIN%"=="chain" set LEIACONV_DEFS="/DLEIACONV_EXE=%LEIACONV_EXE_FILE%" "/DLEIACONV_VER=%LEIACONV_VER%"
 
 :: Quote every /D value so makensis doesn't tokenize on whitespace when
 :: BUNDLE_STAGE / OUT_DIR contains a space (e.g. dev machines under
@@ -232,6 +270,7 @@ makensis ^
     "/DLEIA_EXE=%LEIA_EXE_FILE%" ^
     "/DMCP_EXE=%MCP_EXE_FILE%" ^
     "/DOPENCONV_EXE=%OPENCONV_EXE_FILE%" ^
+    %LEIACONV_DEFS% ^
     "/DGAUSS_EXE=%GAUSS_EXE_FILE%" ^
     "/DMODELVIEWER_EXE=%MODELVIEWER_EXE_FILE%" ^
     "/DMEDIAPLAYER_EXE=%MEDIAPLAYER_EXE_FILE%" ^

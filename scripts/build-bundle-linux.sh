@@ -15,6 +15,13 @@
 # user. Demos are included automatically once their repo attaches a
 # `*_amd64.deb` release asset and components.sh gains their DEB_LINUX glob.
 #
+# The Leia conversion component (`leia_conversion`) is chained when, and only
+# when, the pinned Leia SR plug-in no longer carries the conversion provider
+# itself — the rule is in scripts/lib/leia-conversion-gate.sh. Its package
+# declares Breaks/Replaces against every older plug-in package, so it is
+# REQUIRED from that plug-in pin on and REFUSED below it. The conversion runtime
+# it needs is the display maker's, installed separately, never bundled.
+#
 #   ./scripts/build-bundle-linux.sh --version vX.Y.Z [--keep-stage] [--core-only]
 #
 # Prerequisites: gh (authenticated), jq, tar.
@@ -56,6 +63,22 @@ tag_for() {  # component name -> versions.json pin (runtime already in RUNTIME_T
 # Core first, then demos (order = install/UI order). Demos come from
 # DEMO_COMPONENTS in the runtime's components.sh, so the set stays in lockstep.
 COMPONENTS=(runtime leia_plugin)
+
+# Leia conversion: chained from the first plug-in release without the provider.
+# shellcheck source=scripts/lib/leia-conversion-gate.sh
+source "$REPO_ROOT/scripts/lib/leia-conversion-gate.sh"
+LEIA_PLUGIN_TAG="$(tag_for leia_plugin)"
+LEIACONV_CHAIN=0
+gate_rc=0; leia_conversion_chained "$LEIA_PLUGIN_TAG" || gate_rc=$?
+case "$gate_rc" in
+    0) LEIACONV_CHAIN=1; COMPONENTS+=(leia_conversion) ;;
+    1) echo "==> leia_conversion NOT chained: leia_plugin $LEIA_PLUGIN_TAG < v$LEIA_CONVERSION_MIN_PLUGIN still carries the conversion provider" ;;
+    *) echo "ERROR: cannot decide whether to chain leia_conversion (see above)." >&2; exit 1 ;;
+esac
+# Its .deb glob, for a runtime tag whose components.sh still leaves the field
+# empty (it was empty on purpose until the plug-in dropped the provider). The
+# table wins whenever it has a value.
+LEIACONV_DEB_GLOB_FALLBACK="displayxr-leia-conversion_*_amd64.deb"
 if [[ "$CORE_ONLY" -eq 0 ]]; then
     # shellcheck disable=SC2206
     COMPONENTS+=(${DEMO_COMPONENTS:-})
@@ -69,10 +92,17 @@ echo "==> DisplayXR Linux bundle v$VERSION (runtime $RUNTIME_TAG)"
 GOT=0 SKIPPED=""
 for name in "${COMPONENTS[@]}"; do
     glob="$(component_field "$name" DEB_LINUX)"
+    if [[ -z "$glob" && "$name" == "leia_conversion" ]]; then
+        glob="$LEIACONV_DEB_GLOB_FALLBACK"
+        echo "    note: components.sh@$RUNTIME_TAG has no Linux .deb glob for leia_conversion — using $glob"
+    fi
     if [[ -z "$glob" ]]; then
         SKIPPED+=" $name(no-deb-field)"; continue
     fi
     repo="$(component_field "$name" REPO)"
+    if [[ -z "$repo" && "$name" == "leia_conversion" ]]; then
+        repo="DisplayXR/displayxr-leia-conversion"
+    fi
     tag="$(tag_for "$name")"
     if [[ -z "$tag" || "$tag" == "null" ]]; then
         SKIPPED+=" $name(no-pin)"; continue
@@ -141,6 +171,27 @@ for req in "displayxr-runtime_" "displayxr-leia-sr_"; do
     fi
 done
 
+# Leia conversion: required exactly when the gate chains it, refused otherwise.
+# Both directions are an incomplete or uninstallable bundle, never a warning:
+# without it a plug-in that dropped the provider leaves the display with no
+# conversion from its maker; with it next to an older plug-in, apt refuses the
+# pair (Breaks) and install.sh fails on the user's box.
+shopt -s nullglob
+LEIACONV_DEBS=("$DEBS"/displayxr-leia-conversion_*_amd64.deb)
+shopt -u nullglob
+if [[ "$LEIACONV_CHAIN" -eq 1 && "${#LEIACONV_DEBS[@]}" -eq 0 ]]; then
+    echo "ERROR: leia_plugin $LEIA_PLUGIN_TAG no longer carries the conversion provider, so this bundle" >&2
+    echo "       must chain leia_conversion — but no displayxr-leia-conversion_*_amd64.deb was bundled" >&2
+    echo "       (pin: '$(tag_for leia_conversion)'). Does that release attach the Linux .deb?" >&2
+    exit 1
+fi
+if [[ "$LEIACONV_CHAIN" -eq 0 && "${#LEIACONV_DEBS[@]}" -gt 0 ]]; then
+    echo "ERROR: leia_conversion is chained while leia_plugin is $LEIA_PLUGIN_TAG (< v$LEIA_CONVERSION_MIN_PLUGIN)." >&2
+    echo "       That plug-in still carries the conversion provider and the two packages conflict." >&2
+    echo "       Chain leia_conversion only together with leia_plugin >= v$LEIA_CONVERSION_MIN_PLUGIN." >&2
+    exit 1
+fi
+
 # Pack: debs/ + installer scripts + LICENSE + README.
 cp "$REPO_ROOT/installer/linux/install.sh" "$REPO_ROOT/installer/linux/uninstall.sh" "$BUNDLE/"
 chmod +x "$BUNDLE/install.sh" "$BUNDLE/uninstall.sh"
@@ -156,6 +207,10 @@ the bundled .debs. No environment variables needed. Without the (separately
 provided) Leia SR runtime, apps run on the built-in sim-display fallback; add
 the Leia SR runtime and the Leia display processor claims the display
 automatically.
+$( [[ "$LEIACONV_CHAIN" -eq 1 ]] && printf '%s\n' "" \
+    "Leia conversion (2D-to-3D conversion from the display maker) is installed too." \
+    "It needs the Leia conversion runtime, installed separately; until then the" \
+    "DisplayXR runtime uses its next conversion provider." )
 
 Bundled packages:
 $(cd "$DEBS" && for d in *.deb; do echo "  - $d"; done)
