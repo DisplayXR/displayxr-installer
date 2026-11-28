@@ -175,6 +175,15 @@ if ($shellWiring.Count -gt 0) {
     foreach ($w in $shellWiring) { Write-Host "  - $w" -ForegroundColor Red }
 }
 
+# --- macOS: MCP Tools ships a .pkg, so the macOS bundle must extract it ------
+# process_component alone is not enough: without an extraction rule the .pkg is
+# downloaded and then skipped with a WARN (how MCP stayed out of the macOS
+# bundle until 2026-11-28).
+if ($sh -notmatch '(?m)^extract_mcp_tools\(\)' -or $sh -notmatch '(?m)^\s*mcp_tools\)\s*$') {
+    $failed = $true
+    Write-Host "ERROR: build-bundle.sh has no extract_mcp_tools rule - the macOS bundle would download DisplayXRMCP-*.pkg and skip it." -ForegroundColor Red
+}
+
 # --- Leia rows: unticked unless the catalog's detection says this PC has the display
 $leiaWiring = @()
 if ($nsi -notmatch '(?m)^\s*Section\s+/o\s+"Leia SR plug-in"\s+SecLeia\b') { $leiaWiring += 'the "Leia SR plug-in" section is not declared /o (unticked by default)' }
