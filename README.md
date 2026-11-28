@@ -1,6 +1,6 @@
 # displayxr-installer
 
-End-user meta-installer for [DisplayXR](https://github.com/DisplayXR/displayxr-runtime) — a single `.exe` / `.pkg` bundle that chains the OpenXR runtime, Shell, Leia SR plug-in (and, once the plug-in no longer carries it, the Leia conversion component), MCP Tools, and the open-model conversion provider into one guided install.
+End-user meta-installer for [DisplayXR](https://github.com/DisplayXR/displayxr-runtime) — a single `.exe` / `.pkg` bundle that chains the OpenXR runtime, the Leia SR plug-in (and, once the plug-in no longer carries it, the Leia conversion component), MCP Tools, the open-model conversion provider and the demos into one guided install. The DisplayXR Shell is not in the bundle: it is an optional add-on (catalog id `displayxr-shell`), installed from the DisplayXR Dashboard or its own installer.
 
 Tracks issue [`DisplayXR/displayxr-runtime#284`](https://github.com/DisplayXR/displayxr-runtime/issues/284).
 
@@ -26,14 +26,35 @@ Version 1 of the bundle ships unsigned. SmartScreen / Gatekeeper show a one-time
 | Component | macOS | Windows | Linux |
 |---|---|---|---|
 | DisplayXR Runtime | ✅ | ✅ | ✅ |
-| DisplayXR Shell | — (Windows-only today) | ✅ | — |
-| Leia SR Plug-in | — (Windows-only, vendor SDK) | ✅ | ✅ |
+| DisplayXR Shell | not bundled: an add-on with its own installer | not bundled (Dashboard / own installer) | not bundled |
+| Leia SR Plug-in | — (Windows-only, vendor SDK) | ✅ ticked only on a PC with a Leia SR display (below) | ✅ |
 | Leia conversion (2D→3D conversion from the display maker) | — (no macOS build) | ⏳ from the first bundle whose Leia SR plug-in is ≥ 2.24.0 | ⏳ same rule |
-| MCP Tools | — (Windows-only today) | ✅ | — |
-| Open Conversion provider (open-model 2D→3D) | — (no macOS build today) | ✅ | ⏳ ships a per-user tarball, not a `.deb` |
+| MCP Tools | ✅ | ✅ | — (no Linux build) |
+| Open Conversion provider (open-model 2D→3D) | — (no macOS build today) | ✅ | ⏳ needs a `.deb`: it ships only a per-user tarball, and the Linux bundle installs system packages |
 | Demos (gauss, model viewer, media player, avatar, earthview) | ✅ | ✅ | ⏳ join when they ship a Linux `.deb` |
 
-macOS users get a runtime-only install today; additional components join the bundle as they publish `.pkg` artifacts.
+On macOS the bundle carries the runtime, MCP Tools and the demos; other components join it as they publish `.pkg` artifacts.
+
+### Windows: the Leia SR plug-in is ticked only where there is a Leia SR display
+
+The *Leia SR plug-in* and *Leia conversion* rows start **unticked**. They come up ticked when:
+
+- the component is already installed (an installed row is never unticked for you: unticking an installed row removes it), or
+- the signed DisplayXR Catalog's detection finds a Leia SR display on this PC with **high** confidence. The bundle runs the catalog engine `dxr-get detect` of the runtime it chains (embedded in the bundle), which reads the monitors' EDID ids and the catalog's rules. A low-confidence match never ticks, and neither does a failed check (no network, no PowerShell): you can still tick the row by hand.
+
+Silent installs (`/S`) follow the same rule. Overrides, for IT:
+
+| Switch | Effect |
+|---|---|
+| `/LEIA=1` | tick both rows whatever detection says (a display not connected yet, an offline install) |
+| `/LEIA=0` | skip detection; the rows are ticked only when already installed |
+| `/CATALOG=<url\|file>` | hand dxr-get another signed catalog (testing) |
+
+Why: the plug-in's own installer is going to fetch the display maker's platform software, so installing it on every PC would pull vendor software onto machines without the display.
+
+### The DisplayXR Shell
+
+Not part of the bundle on any platform. Upgrading with the bundle leaves an installed Shell exactly as it is (the bundle has no row for it, so it can neither update nor remove it); update it from the Dashboard or its own installer. Uninstalling the bundle uninstalls the runtime, and the runtime's uninstaller removes every registered workspace controller with it, so the Shell goes too.
 
 The exact version pins for each release live in [`versions.json`](versions.json) at the tagged commit.
 
@@ -134,7 +155,7 @@ Releases are cut by manual `workflow_dispatch` on `.github/workflows/publish-bun
 2. Merge.
 3. Run **Publish bundle** → enter the bundle tag (e.g. `v0.1.0`) → workflow builds both platforms in parallel and attaches `.exe` + `.pkg` to a new GitHub Release.
 
-Not auto-triggered on component releases — that would be brittle (e.g., a runtime patch release shouldn't republish a bundle that wasn't compat-tested against the latest Shell).
+Not auto-triggered on component releases — that would be brittle (e.g., a runtime patch release shouldn't republish a bundle that wasn't compat-tested against the components it chains).
 
 ## License
 

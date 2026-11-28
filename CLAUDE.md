@@ -4,7 +4,7 @@ Project guidance for Claude Code (claude.ai/code) when working in this repo.
 
 ## What this repo is
 
-`displayxr-installer` produces the **end-user meta-installer** for DisplayXR — one `.exe` / `.pkg` per OS that chains every component installer (runtime + Shell + Leia plug-in + Leia conversion (gated, below) + MCP Tools + Open Conversion provider + demos) into a single guided flow.
+`displayxr-installer` produces the **end-user meta-installer** for DisplayXR — one `.exe` / `.pkg` per OS that chains the component installers (runtime + Leia plug-in + Leia conversion (gated, below) + MCP Tools + Open Conversion provider + demos) into a single guided flow. **The DisplayXR Shell is not a bundle component on any platform** (David, 2026-11-28): it is the catalog add-on `displayxr-shell`, installed from the Dashboard or its own installer; `shell` stays a `versions.json` pin and is listed in `$IntentionallyUnbundled`.
 
 Tracks issue [`DisplayXR/displayxr-runtime#284`](https://github.com/DisplayXR/displayxr-runtime/issues/284).
 
@@ -47,12 +47,11 @@ displayxr-installer/
 |---|---|---|
 | `DisplayXR/displayxr-runtime` | `scripts/lib/components.sh` (per-component asset table) | `curl https://raw.githubusercontent.com/.../$RUNTIME_TAG/scripts/lib/components.sh` |
 | `DisplayXR/displayxr-runtime` | `DisplayXR-Installer-*.pkg` (macOS), `DisplayXRSetup-*.exe` (Windows) | `gh release download $RUNTIME_TAG --repo ...` |
-| `DisplayXR/displayxr-shell-releases` | `DisplayXRShellSetup-*.exe` (Windows) | `gh release download $SHELL_TAG --repo ...` |
 | `DisplayXR/displayxr-leia-plugin` | `DisplayXRLeiaSRSetup-*.exe` (Windows) | `gh release download $LEIA_TAG --repo ...` |
-| `DisplayXR/displayxr-mcp` | `DisplayXRMCPSetup-*.exe` (Windows) | `gh release download $MCP_TAG --repo ...` |
+| `DisplayXR/displayxr-mcp` | `DisplayXRMCPSetup-*.exe` (Windows), `DisplayXRMCP-*.pkg` (macOS) | `gh release download $MCP_TAG --repo ...` |
 | `DisplayXR/displayxr-leia-conversion` | `DisplayXRLeiaConversionSetup-*.exe` (Windows), `displayxr-leia-conversion_*_amd64.deb` (Linux) — **only when `leia_plugin` ≥ v2.24.0** | `gh release download $LEIACONV_TAG --repo ...` |
 
-Components without a macOS `.pkg` today (Shell, Leia, MCP) are silently skipped on the macOS side. The bundle build picks them up automatically when their releases start carrying `.pkg` artifacts and the runtime repo's `components.sh` populates `COMPONENT_PKG_MACOS_<name>`.
+Components without a macOS `.pkg` today (Leia, the conversion providers) are silently skipped on the macOS side. A component that HAS a `.pkg` also needs an `extract_<name>` rule in `build-bundle.sh`, or it is downloaded and skipped with a WARN (how MCP stayed out until 2026-11-28). The bundle build picks them up automatically when their releases start carrying `.pkg` artifacts and the runtime repo's `components.sh` populates `COMPONENT_PKG_MACOS_<name>`.
 
 ## Build commands
 
@@ -68,7 +67,7 @@ scripts\build-bundle.bat --version v0.1.0
 
 Prerequisites:
 - **macOS:** `gh` (with auth), `jq`, `productbuild`, `pkgutil` (Xcode CLT)
-- **Windows:** `gh` (with auth), NSIS 3.x (`choco install nsis`), PowerShell
+- **Windows:** `gh` (with auth), NSIS 3.x (`choco install nsis`), PowerShell, 7-Zip (`7z`: takes `dxr-get.exe` out of the runtime installer; preinstalled on GitHub's Windows images)
 
 ## Release flow
 
@@ -137,6 +136,8 @@ check verifies the wiring in **both** states. Things that are load-bearing:
 
 Full design rationale:
 [`displayxr-runtime/docs/specs/runtime/versions-json-autobump.md`](https://github.com/DisplayXR/displayxr-runtime/blob/main/docs/specs/runtime/versions-json-autobump.md).
+
+**Windows Leia rows are detection-gated (David, 2026-11-28).** `SecLeia` / `SecLeiaConv` are `Section /o`. `.onInit` ticks them only when installed, on `/LEIA=1`, or when `dxr-get detect` (the signed catalog's rules) reports a **high**-confidence Leia SR display; `low`, offline and any failure leave them unticked. The bundle embeds the `dxr-get.exe` of the runtime installer it chains (`build-bundle.bat`, 7-Zip) because no runtime may be installed yet at `.onInit`; `installer/windows/detect-display.ps1` runs it with a bounded wait and parses the JSON (NSIS strings would truncate it). Load-bearing: "installed => ticked" must stay, or an installed plug-in is **removed** by its section's unticked branch. Linux has no POSIX `dxr-get` yet, so the Linux bundle still installs the plug-in unconditionally (it is inert without the display maker's runtime).
 
 ## Conventions inherited from `displayxr-runtime`
 
