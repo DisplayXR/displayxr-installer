@@ -1,5 +1,5 @@
 ; DisplayXR end-user meta-installer (issue DisplayXR/displayxr-runtime#284)
-; Chains the Runtime + Shell + Leia plug-in + MCP Tools + Open Conversion
+; Chains the Runtime + Leia plug-in + MCP Tools + Open Conversion
 ; provider + Gaussian Splat,
 ; 3D Model Viewer, and Stereo Media Player demo installers in one guided
 ; flow. Each child is invoked silently
@@ -17,7 +17,6 @@
 ; Build inputs (passed by scripts/build-bundle.bat via /D):
 ;   BUNDLE_VERSION   e.g. 0.2.0
 ;   RUNTIME_EXE      filename of staged runtime installer
-;   SHELL_EXE        filename of staged shell installer
 ;   LEIA_EXE         filename of staged leia plug-in installer
 ;   MCP_EXE          filename of staged mcp tools installer
 ;   OPENCONV_EXE     filename of staged open-conversion provider installer
@@ -30,6 +29,17 @@
 ;   MEDIAPLAYER_EXE  filename of staged stereo media player demo installer
 ;   AVATAR_EXE       filename of staged 3D avatar demo installer
 ;   EARTHVIEW_EXE    filename of staged earthview demo installer
+;   DXR_GET_EXE      absolute path to the dxr-get.exe of the chained runtime
+;                    release (scripts/build-bundle.bat extracts it from the
+;                    runtime installer). Embedded for DetectDisplay only.
+;
+; Not chained: the DisplayXR Shell (workspace controller). Since 2026-11-28
+; it is a separate catalog add-on (catalog id displayxr-shell), installed from
+; the Dashboard or its own installer. The bundle neither embeds, installs nor
+; removes it (see "-StopDisplayXRProcesses" and the uninstaller). What it does
+; do, for the Shell and for any other catalog add-on the user installed (the
+; DisplayXR Browser, ...), is bring an INSTALLED one up to the catalog's
+; version through dxr-get: "-UpdateAddons".
 ;   BUNDLE_STAGE     absolute path to dir containing the staged .exe files + LICENSE
 ;   OUTPUT_DIR       absolute path for OutFile
 
@@ -38,9 +48,6 @@
 !endif
 !ifndef RUNTIME_EXE
     !error "RUNTIME_EXE not defined"
-!endif
-!ifndef SHELL_EXE
-    !error "SHELL_EXE not defined"
 !endif
 !ifndef LEIA_EXE
     !error "LEIA_EXE not defined"
@@ -71,9 +78,6 @@
 !ifndef RUNTIME_VER
     !error "RUNTIME_VER not defined"
 !endif
-!ifndef SHELL_VER
-    !error "SHELL_VER not defined"
-!endif
 !ifndef LEIA_VER
     !error "LEIA_VER not defined"
 !endif
@@ -97,6 +101,12 @@
 !endif
 !ifndef EARTHVIEW_VER
     !error "EARTHVIEW_VER not defined"
+!endif
+!ifdef SHELL_EXE
+    !error "SHELL_EXE is defined, but the DisplayXR Shell is no longer part of the bundle (it is a catalog add-on). Drop it from the build script."
+!endif
+!ifndef DXR_GET_EXE
+    !error "DXR_GET_EXE not defined (the dxr-get.exe that DetectDisplay runs; scripts/build-bundle.bat extracts it from the runtime installer)"
 !endif
 ;--------------------------------
 ; Leia conversion gate (compile time).
@@ -187,6 +197,11 @@ ShowUninstDetails show
 !insertmacro MUI_PAGE_LICENSE "${BUNDLE_STAGE}\LICENSE"
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
+; The finish text is a variable so -UpdateAddons can add the add-ons it could
+; not update (set in .onInit, extended in -FinalizeBundleArp). Declared here:
+; the page's code is generated at this line and must see the Var.
+Var G_FinishText
+!define MUI_FINISHPAGE_TEXT "$G_FinishText"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -203,7 +218,6 @@ ShowUninstDetails show
 ;--------------------------------
 
 Var G_RuntimeInstalled
-Var G_ShellInstalled
 Var G_LeiaInstalled
 Var G_McpInstalled
 Var G_OpenConvInstalled
@@ -215,6 +229,22 @@ Var G_ModelViewerInstalled
 Var G_MediaPlayerInstalled
 Var G_AvatarInstalled
 Var G_EarthViewInstalled
+
+; Leia SR rows' default (DetectDisplay / .onInit): the detection verdict line,
+; and the one-line reason the rows started ticked or unticked, printed into
+; the install log by -StopDisplayXRProcesses.
+Var G_LeiaDetect
+Var G_LeiaDefaultWhy
+
+; /CATALOG=<url|file> as the PowerShell helpers' ' -Catalog "<value>"' suffix
+; ("" without the switch), parsed once in .onInit.
+Var G_CatalogPs
+; -UpdateAddons: 1 = /NOADDONUPDATE; and "<name> (<reason>), ..." of the
+; installed add-ons it could not bring to the catalog's version. Never a
+; bundle failure: it goes to the log, the finish page and the ARP value
+; LastAddonUpdateFailure, NOT to G_ChildFailures / the exit code.
+Var G_NoAddonUpdate
+Var G_AddonNotUpdated
 
 ; Child-installer failures (install-order epic, runtime #1803 / installer #74).
 ; A failing child used to `Abort` its section, which also skipped
@@ -237,7 +267,6 @@ Var G_RepairList
 ; Installed DisplayVersion per child (from its ARP key), read in .onInit
 ; and compared against the bundle's pinned target version (#346).
 Var G_RuntimeVer
-Var G_ShellVer
 Var G_LeiaVer
 Var G_McpVer
 Var G_OpenConvVer
@@ -347,6 +376,9 @@ Function WriteInstallLog
     FileWrite $5 "Installer: $EXEPATH$\r$\n"
     ${If} $G_ChildFailures != ""
         FileWrite $5 "Components that did not install cleanly: $G_ChildFailures$\r$\n"
+    ${EndIf}
+    ${If} $G_AddonNotUpdated != ""
+        FileWrite $5 "Add-ons not updated (the bundle still succeeded): $G_AddonNotUpdated$\r$\n"
     ${EndIf}
     FileWrite $5 "$\r$\n"
 
@@ -672,7 +704,7 @@ FunctionEnd
 ; run. Fixing that means splitting on the last comma, and is only worth
 ; doing if a child ever starts writing it.
 ;
-; Stack in:  ARP key name (e.g. "DisplayXRShell")
+; Stack in:  ARP key name (e.g. "DisplayXRMCP")
 ; Stack out: "1" installed and intact
 ;            "0" marker present, files missing -> caller should REINSTALL
 ;            ""  no marker at all -> not installed
@@ -894,7 +926,14 @@ Section "-StopDisplayXRProcesses"
     ${If} $R0 == 2
         Call RuntimeHolderPreflight
     ${EndIf}
+    ; Record why the Leia SR rows started the way they did (DetectDisplay ran in
+    ; .onInit, before there was a details list to print to).
+    DetailPrint "Leia SR plug-in default: $G_LeiaDefaultWhy"
     DetailPrint "Stopping DisplayXR processes for the install chain..."
+    ; The Shell is not a bundle component any more, but a running one still
+    ; lives in the runtime directory and holds the runtime's files, so it is
+    ; stopped like before. It comes back on demand (the service's hotkey)
+    ; once -FinalizeBundleArp restarts the service.
     nsExec::ExecToLog 'taskkill /f /im displayxr-shell.exe'
     Pop $0
     nsExec::ExecToLog 'taskkill /f /im displayxr-service.exe'
@@ -974,36 +1013,11 @@ Section "DisplayXR Runtime (required)" SecRuntime
     ${EndIf}
 SectionEnd
 
-SectionGroup /e "Workspace" SecGrpWorkspace
-    Section "DisplayXR Shell" SecShell
-        !insertmacro SkipIfRuntimeFailed "DisplayXR Shell"
-        SetOutPath "$INSTDIR"
-        ${If} ${SectionIsSelected} ${SecShell}
-            ${If} $G_ShellInstalled == 0
-                DetailPrint "Installing DisplayXR Shell..."
-                File "${BUNDLE_STAGE}\${SHELL_EXE}"
-                StrCpy $G_ChildExe   "${SHELL_EXE}"
-                StrCpy $G_ChildHuman "DisplayXR Shell"
-                StrCpy $G_ChildArgs  ""
-                Call RunChildInstaller
-                ${If} $0 != 0
-                    !insertmacro ChildFailed "DisplayXR Shell" $0 0
-                ${EndIf}
-                Delete "$INSTDIR\${SHELL_EXE}"
-            ${Else}
-                !insertmacro UpgradeOrSkip $G_ShellVer "${SHELL_VER}" "${SHELL_EXE}" "DisplayXR Shell" "" 0
-            ${EndIf}
-        ${ElseIf} $G_ShellInstalled == 1
-            DetailPrint "Removing DisplayXR Shell..."
-            ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRShell" "UninstallString"
-            ${If} $1 != ""
-                StrCpy $G_ChildRan 1
-                !insertmacro ExecChild '$1 /S'
-                !insertmacro ChildRemoved "DisplayXR Shell" $0
-            ${EndIf}
-        ${EndIf}
-    SectionEnd
-
+; "Tools" was "Workspace" until the DisplayXR Shell left the bundle
+; (2026-11-28). An installed Shell is never removed: there is no section for
+; it, so no "unticked + installed -> remove" branch can fire for it. It is
+; updated, if behind the catalog, by "-UpdateAddons".
+SectionGroup /e "Tools" SecGrpTools
     Section "MCP Tools" SecMcp
         !insertmacro SkipIfRuntimeFailed "DisplayXR MCP Tools"
         SetOutPath "$INSTDIR"
@@ -1035,7 +1049,9 @@ SectionGroup /e "Workspace" SecGrpWorkspace
 SectionGroupEnd
 
 SectionGroup /e "Vendor plug-ins" SecGrpVendors
-    Section "Leia SR plug-in" SecLeia
+    ; /o = unticked unless .onInit ticks it: already installed, or a Leia SR
+    ; display detected (DetectDisplay), or /LEIASR=1. See .onInit.
+    Section /o "Leia SR plug-in" SecLeia
         !insertmacro SkipIfRuntimeFailed "Leia SR plug-in"
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecLeia}
@@ -1082,7 +1098,7 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
     ;
     ; The child accepts /NOSTART (it never starts anything) and is passed it
     ; like every child that could.
-    Section "Leia conversion" SecLeiaConv
+    Section /o "Leia conversion" SecLeiaConv
         !insertmacro SkipIfRuntimeFailed "Leia conversion"
         SetOutPath "$INSTDIR"
         ${If} ${SectionIsSelected} ${SecLeiaConv}
@@ -1133,8 +1149,9 @@ SectionGroup /e "Vendor plug-ins" SecGrpVendors
 SectionGroupEnd
 
 SectionGroup /e "Conversion providers" SecGrpConversion
-    ; Open-model 2D-to-3D conversion provider (ADR-053 P4). Same shape as the
-    ; vendor plug-in section: default-checked, pre-checked when installed, removed via
+    ; Open-model 2D-to-3D conversion provider (ADR-053 P4). Vendor-neutral,
+    ; so unlike the vendor plug-in section it is default-checked on every PC;
+    ; pre-checked when installed, removed via
     ; its own UninstallString. The child has no /NOSTART switch (it never
     ; starts anything), so it is invoked with /S only.
     Section "Open Conversion provider" SecOpenConv
@@ -1321,6 +1338,111 @@ SectionGroupEnd
 ; records the failures, and restarts the service.
 ;--------------------------------
 
+;--------------------------------
+; -UpdateAddons -- bring the installed catalog add-ons the bundle does NOT
+; carry up to the catalog's version, so they keep up with the runtime this
+; run installed (David, 2026-11-28). Today that is the DisplayXR Shell (it
+; left the bundle) and anything the user added from the catalog (the
+; DisplayXR Browser, a third-party provider). Items the sections above
+; handle are skipped (ADDON_SKIP_IDS), and so are the runtime and every
+; research item; update-addons.ps1 has the details.
+;
+; The INSTALLED runtime's dxr-get, never the embedded detection copy: the
+; runtime section above has just installed or upgraded the runtime, so that
+; copy is the current engine; on the version-skip path it is the engine of
+; the runtime that is current anyway. After a failed runtime install nothing
+; runs (SkipIfRuntimeFailed), like every other section.
+;
+; Never a bundle failure: an add-on that cannot be updated keeps its version,
+; is listed in the log and on the finish page, and is written to the ARP value
+; LastAddonUpdateFailure; the exit code is unaffected. Offline = one log line.
+; Bounded: the helper copies dxr-get's lines through as they come and ends a
+; dxr-get that is silent for ADDON_SILENCE_S; nsExec's /TIMEOUT (time without
+; output) is the backstop above that. /S behaves the same; /NOADDONUPDATE
+; skips the section. The service stays down (--no-start-service): the
+; finalize section below restarts it once.
+;
+; Windows only: macOS and Linux have no POSIX dxr-get yet (ADR-064 step 5).
+;--------------------------------
+!define ADDON_SILENCE_S 600
+!define /math ADDON_NSEXEC_TIMEOUT_MS ${ADDON_SILENCE_S} * 1000
+!define /redef /math ADDON_NSEXEC_TIMEOUT_MS ${ADDON_NSEXEC_TIMEOUT_MS} + 60000
+; Catalog ids AND aliases the bundle's own sections install, upgrade and
+; remove; dxr-get must not touch them behind those sections' backs. Ids from
+; the runtime's scripts/gen_catalog.py V2_ITEMS; the versions.json keys ride
+; along as aliases. MCP and the demos are not catalog items today; their
+; keys are listed so a future catalog entry stays the bundle's.
+!ifdef LEIACONV_EXE
+    !define ADDON_SKIP_LEIACONV ",leia-conversion,leia_conversion"
+!else
+    !define ADDON_SKIP_LEIACONV ""
+!endif
+!define ADDON_SKIP_IDS "runtime,leia-sr,leia_plugin,open-conversion,conversion_open${ADDON_SKIP_LEIACONV},mcp_tools,mcp,gauss_demo,modelviewer_demo,mediaplayer_demo,avatar_demo,earthview_demo"
+
+Section "-UpdateAddons"
+    !insertmacro SkipIfRuntimeFailed "add-on updates"
+    ${If} $G_NoAddonUpdate == 1
+        DetailPrint "Add-on updates: skipped (/NOADDONUPDATE)."
+        Return
+    ${EndIf}
+    ReadRegStr $1 HKLM "Software\DisplayXR\Runtime" "InstallPath"
+    ${If} $1 == ""
+    ${OrIfNot} ${FileExists} "$1\dxr-get.exe"
+        DetailPrint "Add-on updates: skipped (no dxr-get.exe in the runtime directory '$1')."
+        Return
+    ${EndIf}
+
+    DetailPrint "Updating installed add-ons the bundle does not carry (dxr-get)..."
+    File "/oname=$PLUGINSDIR\update-addons.ps1" "${__FILEDIR__}\update-addons.ps1"
+    Delete "$PLUGINSDIR\addon-results.txt"
+    nsExec::ExecToLog /TIMEOUT=${ADDON_NSEXEC_TIMEOUT_MS} '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-addons.ps1" -DxrGet "$1\dxr-get.exe" -Skip "${ADDON_SKIP_IDS}" -Results "$PLUGINSDIR\addon-results.txt" -SilenceSec ${ADDON_SILENCE_S}$G_CatalogPs'
+    Pop $0
+    ${If} $0 != 0
+        DetailPrint "WARNING: the add-on update helper did not finish ($0)."
+        StrCpy $G_AddonNotUpdated "the add-on update check (helper: $0), "
+    ${EndIf}
+
+    ; Results: one "kind|id|name|a|b" line each (update-addons.ps1).
+    ClearErrors
+    FileOpen $2 "$PLUGINSDIR\addon-results.txt" r
+    ${IfNot} ${Errors}
+      ua_read:
+        ClearErrors
+        FileRead $2 $3
+        ${If} ${Errors}
+            Goto ua_done
+        ${EndIf}
+        ${WordFind} "$3" "$\r" "+1" $3
+        ${WordFind} "$3" "$\n" "+1" $3
+        ${WordFind} "$3" "|" "+1" $4         ; kind
+        ${WordFind} "$3" "|" "+3" $5         ; name
+        ${WordFind} "$3" "|" "+4" $6         ; reason / from
+        ${If} $4 == "updated"
+            StrCpy $G_ChildRan 1
+            ${WordFind} "$3" "|" "+5" $7
+            DetailPrint "Add-on updated: $5 ($6 -> $7)"
+        ${ElseIf} $4 == "failed"
+            StrCpy $G_ChildRan 1
+            DetailPrint "WARNING: add-on not updated: $5 - $6"
+            StrCpy $G_AddonNotUpdated "$G_AddonNotUpdated$5 ($6), "
+        ${ElseIf} $4 == "skipped"
+            DetailPrint "Add-on not updated: $5 - $6"
+            StrCpy $G_AddonNotUpdated "$G_AddonNotUpdated$5 ($6), "
+        ${ElseIf} $4 == "offline"
+            DetailPrint "Add-on updates: skipped, $6."
+        ${ElseIf} $4 == "error"
+            DetailPrint "WARNING: add-on updates: $6"
+            StrCpy $7 "the add-on update check ($6), "
+            StrCpy $G_AddonNotUpdated "$G_AddonNotUpdated$7"
+        ${ElseIf} $4 == "none"
+            DetailPrint "Add-on updates: every installed add-on is current."
+        ${EndIf}
+        Goto ua_read
+      ua_done:
+        FileClose $2
+    ${EndIf}
+SectionEnd
+
 Section "-FinalizeBundleArp"
     ; After a failed runtime install the bundle did not install this
     ; version: leave the ARP entry / cache of whatever version was there
@@ -1377,6 +1499,19 @@ Section "-FinalizeBundleArp"
     ${Else}
         DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
             "LastChildFailure"
+    ${EndIf}
+
+    ; -UpdateAddons: what it could not update, kept apart from the child
+    ; failures above on purpose (it never fails the bundle or its exit code).
+    ${If} $G_AddonNotUpdated != ""
+        StrCpy $G_AddonNotUpdated $G_AddonNotUpdated -2  ; drop the trailing ", "
+        WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
+            "LastAddonUpdateFailure" "$G_AddonNotUpdated"
+        DetailPrint "Add-ons not updated (they keep their current version): $G_AddonNotUpdated"
+        StrCpy $G_FinishText "$G_FinishText$\r$\n$\r$\nNot updated (they keep their current version): $G_AddonNotUpdated.$\r$\nRun this installer again with an internet connection, or update them from the DisplayXR Dashboard."
+    ${Else}
+        DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
+            "LastAddonUpdateFailure"
     ${EndIf}
 
     ; Flush the volume cache before declaring the install done (#86). NTFS
@@ -1458,9 +1593,68 @@ FunctionEnd
 ; WOW6432Node, which was bug #2 in PR #1), then read each child's
 ; current install state and pre-check the matching section.
 ;
-; Must run AFTER all Section declarations so the ${SecShell} /
-; ${SecMcp} / ${SecLeia} / ${SecGauss} !defines are populated by NSIS.
+;
+; Must run AFTER all Section declarations so the ${SecMcp} /
+; ${SecLeia} / ${SecGauss} !defines are populated by NSIS.
 ;--------------------------------
+
+;--------------------------------
+; DetectDisplay -- is a Leia SR display attached to this PC?
+;
+; The bundle does no hardware detection of its own. It asks the install
+; engine of the runtime it chains: `dxr-get detect --json`, which evaluates
+; the `detect` rules of the signed DisplayXR Catalog (monitor EDID ids, plus
+; a registry rule) -- runtime docs/specs/runtime/dxr-get.md, "Detection".
+; Supporting a new panel is therefore a catalog change, not a bundle change.
+;
+; In .onInit the runtime -- and so its installed dxr-get -- may not be on the
+; PC yet, and an installed one may be an older build. So the bundle embeds
+; the dxr-get.exe of the runtime release it chains (build-bundle.bat takes
+; it out of that runtime installer) and runs it from $PLUGINSDIR. That copy
+; always exists, needs no runtime, and is the same engine the runtime
+; installer's own component page uses at that version.
+;
+; detect-display.ps1 runs it (bounded wait, proper JSON parsing) and prints
+; one verdict word; see that script. Only "high" ticks. "low" never does
+; (the runtime installer's catalog-page rule), and neither does anything
+; that went wrong: no network (dxr-get reads the catalog online), no
+; PowerShell, a timeout. All of those cost the automatic tick only; the user
+; can still tick the row, and /LEIASR=1 forces it for unattended installs.
+;
+; Out: $G_LeiaDetect = the verdict line (first word decides)
+;--------------------------------
+Function DetectDisplay
+    Push $0
+    Push $1
+    Push $2
+    StrCpy $G_LeiaDetect ""
+    File "/oname=$PLUGINSDIR\dxr-get.exe" "${DXR_GET_EXE}"
+    File "/oname=$PLUGINSDIR\detect-display.ps1" "${__FILEDIR__}\detect-display.ps1"
+
+    StrCpy $2 $G_CatalogPs   ; /CATALOG=, parsed in .onInit
+
+    ${IfNot} ${Silent}
+        Banner::show "Checking this PC for a 3D display..."
+    ${EndIf}
+    ; /TIMEOUT is a backstop only: the script bounds dxr-get's own wait (25 s).
+    nsExec::ExecToStack /TIMEOUT=45000 '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\detect-display.ps1" -DxrGet "$PLUGINSDIR\dxr-get.exe" -Component leia_plugin$2'
+    Pop $0                   ; exit code, "error" or "timeout"
+    Pop $1                   ; the verdict line
+    ${IfNot} ${Silent}
+        Banner::destroy
+    ${EndIf}
+    ${If} $0 == 0
+        ; Strip a trailing CR/LF from PowerShell's output.
+        ${WordFind} "$1" "$\r" "+1" $1
+        ${WordFind} "$1" "$\n" "+1" $1
+        StrCpy $G_LeiaDetect $1
+    ${Else}
+        StrCpy $G_LeiaDetect "error detection helper did not run ($0)"
+    ${EndIf}
+    Pop $2
+    Pop $1
+    Pop $0
+FunctionEnd
 
 Function .onInit
     SetRegView 64
@@ -1469,7 +1663,6 @@ Function .onInit
     SetShellVarContext all
 
     StrCpy $G_RuntimeInstalled 0
-    StrCpy $G_ShellInstalled   0
     StrCpy $G_LeiaInstalled    0
     StrCpy $G_McpInstalled     0
     StrCpy $G_OpenConvInstalled 0
@@ -1487,7 +1680,31 @@ Function .onInit
     StrCpy $G_RepairList       ""
     StrCpy $G_ChildRan         0
     StrCpy $G_RuntimeVer       ""
-    StrCpy $G_ShellVer         ""
+    StrCpy $G_LeiaDetect       ""
+    StrCpy $G_LeiaDefaultWhy   ""
+    StrCpy $G_AddonNotUpdated  ""
+    StrCpy $G_FinishText "DisplayXR ${BUNDLE_VERSION} has been installed on your computer.$\r$\n$\r$\nClick Finish to close this wizard."
+
+    ; /CATALOG=<url|file>: handed to dxr-get as --catalog by both PowerShell
+    ; helpers (testing; the catalog must still be signed). A value with a
+    ; double quote is ignored. /NOADDONUPDATE: skip "-UpdateAddons".
+    StrCpy $G_CatalogPs ""
+    StrCpy $G_NoAddonUpdate 0
+    ${GetParameters} $R0
+    ClearErrors
+    ${GetOptions} $R0 "/CATALOG=" $R1
+    ${IfNot} ${Errors}
+    ${AndIf} $R1 != ""
+        ${WordFind} $R1 '"' "E#" $R2
+        ${If} ${Errors}
+            StrCpy $G_CatalogPs ' -Catalog "$R1"'
+        ${EndIf}
+    ${EndIf}
+    ClearErrors
+    ${GetOptions} $R0 "/NOADDONUPDATE" $R1
+    ${IfNot} ${Errors}
+        StrCpy $G_NoAddonUpdate 1
+    ${EndIf}
     StrCpy $G_LeiaVer          ""
     StrCpy $G_McpVer           ""
     StrCpy $G_OpenConvVer      ""
@@ -1519,11 +1736,9 @@ Function .onInit
     ; install state to skip a redundant /S re-run.
     !insertmacro DetectComponent "DisplayXR" $G_RuntimeInstalled $G_RuntimeVer "DisplayXR Runtime" 0
 
-    ; Shell — default-checked. Pre-checked when already installed too.
-    !insertmacro DetectComponent "DisplayXRShell" $G_ShellInstalled $G_ShellVer "DisplayXR Shell" 0
-    ${If} $0 != ""
-        !insertmacro SelectSection ${SecShell}
-    ${EndIf}
+    ; The DisplayXR Shell is not probed: it is not a bundle component any
+    ; more (a catalog add-on since 2026-11-28). An installed one is never
+    ; removed; "-UpdateAddons" brings it to the catalog's version.
 
     ; MCP — default-checked. Pre-checked when already installed.
     !insertmacro DetectComponent "DisplayXRMCP" $G_McpInstalled $G_McpVer "DisplayXR MCP Tools" 1
@@ -1561,18 +1776,58 @@ Function .onInit
         !insertmacro SelectSection ${SecEarthView}
     ${EndIf}
 
-    ; Vendor display plug-in — default-checked like every other component,
-    ; pre-checked when already installed. The bundle does NOT look for the
-    ; vendor's own platform software (install-order epic, runtime #1803,
-    ; B-a): the bundle knows its component list, not vendor paths. A plug-in
-    ; without its platform is inert (the runtime keeps using its sim-display
-    ; fallback) and becomes active once the platform is installed, in either
-    ; order. Gating the default on a vendor path made a silent bundle on a
-    ; box without the platform never install the plug-in at all, so
-    ; installing the platform afterwards changed nothing.
+    ; Vendor display plug-in -- ticked ONLY where it is for (David,
+    ; 2026-11-28): when it is already installed, or when the catalog's
+    ; detection finds a Leia SR display on this PC with high confidence
+    ; (DetectDisplay). On any other PC it starts unticked, and an unticked,
+    ; not-installed row does nothing.
+    ;
+    ; This reverses the earlier rule (install-order epic, runtime #1803, B-a)
+    ; that ticked the plug-in on every PC because a plug-in without its
+    ; platform software is inert. That stopped being harmless: the plug-in's
+    ; own installer is going to fetch the display maker's platform software
+    ; as part of its install, so "tick it everywhere" would pull vendor
+    ; software onto PCs that have no such display. B-a's other half still
+    ; holds -- the bundle does not look for vendor paths: the decision is the
+    ; signed catalog's detect rules, evaluated by dxr-get, the same rules the
+    ; runtime installer's component page uses.
+    ;
+    ; "Installed => ticked" is load-bearing now that the section is /o: an
+    ; installed plug-in whose row started unticked would be REMOVED by its
+    ; section's "unticked + installed" branch. The marker test ($0 != "")
+    ; also covers an install whose files were damaged, so the run repairs it.
+    ;
+    ; Overrides (interactive and /S alike):
+    ;   /LEIASR=1  tick it whatever the detection says (IT deploying to a PC
+    ;            whose display is not attached yet, or an offline install)
+    ;   /LEIASR=0  do not run detection; ticked only if installed (never a
+    ;            way to remove it -- untick it on the page for that)
+    ;   none     detection decides (also in a silent /S run)
     !insertmacro DetectComponent "DisplayXRLeiaSR" $G_LeiaInstalled $G_LeiaVer "Leia SR plug-in" 1
-    ${If} $0 != ""
+    StrCpy $2 $0             ; keep the marker verdict across GetOptions
+    ${GetParameters} $R0
+    ClearErrors
+    ${GetOptions} $R0 "/LEIASR=" $R1
+    ${If} ${Errors}
+        StrCpy $R1 "auto"
+    ${EndIf}
+    ${If} $2 != ""
+        StrCpy $G_LeiaDefaultWhy "ticked (already installed)"
         !insertmacro SelectSection ${SecLeia}
+    ${ElseIf} $R1 == "1"
+        StrCpy $G_LeiaDefaultWhy "ticked (/LEIASR=1)"
+        !insertmacro SelectSection ${SecLeia}
+    ${ElseIf} $R1 == "0"
+        StrCpy $G_LeiaDefaultWhy "unticked (/LEIASR=0: detection not run)"
+    ${Else}
+        Call DetectDisplay
+        ${WordFind} "$G_LeiaDetect" " " "+1" $R2    ; first word (the whole line if it is one word)
+        ${If} $R2 == "high"
+            StrCpy $G_LeiaDefaultWhy "ticked (Leia SR display detected: $G_LeiaDetect)"
+            !insertmacro SelectSection ${SecLeia}
+        ${Else}
+            StrCpy $G_LeiaDefaultWhy "unticked (no high-confidence Leia SR display match: $G_LeiaDetect)"
+        ${EndIf}
     ${EndIf}
 
     ; Open-model conversion provider — default-checked like every other
@@ -1584,14 +1839,18 @@ Function .onInit
     ${EndIf}
 
 !ifdef LEIACONV_EXE
-    ; Leia conversion - default-checked with the plug-in it belongs to (every
-    ; section starts checked), pre-checked when already installed. Like the
-    ; plug-in it is inert without the display maker's own software. Its
-    ; installed version is the component's own marker,
+    ; Leia conversion - ticked with the plug-in it belongs to: when it is
+    ; installed itself ("installed => ticked", load-bearing for the same /o
+    ; reason as the plug-in), or whenever the plug-in row above was ticked
+    ; (installed plug-in, a detected Leia SR display, /LEIASR=1). The
+    ; installed-plug-in case is what carries a box from a plug-in that still
+    ; held the conversion provider (< ${LEIACONV_MIN_LEIA_VER}) over to the
+    ; component. Its installed version is the component's own marker,
     ; HKLM\Software\DisplayXR\Plugins\LeiaConversion "Version" (the ARP
     ; DisplayVersion carries the same value and is the fallback).
     !insertmacro DetectComponent "DisplayXRLeiaConversion" $G_LeiaConvInstalled $G_LeiaConvVer "Leia conversion" 1
     ${If} $0 != ""
+    ${OrIf} ${SectionIsSelected} ${SecLeia}
         !insertmacro SelectSection ${SecLeiaConv}
     ${EndIf}
     ${If} $G_LeiaConvInstalled == 1
@@ -1612,7 +1871,7 @@ FunctionEnd
 ;   the user ticked the conversion  -> tick the plug-in it needs;
 ;   anything else (the plug-in or its group was unticked) -> untick the
 ;   conversion, which the section then removes if it was installed.
-; Never fires in a silent run, where every section keeps its default (checked).
+; Never fires in a silent run, where every section keeps what .onInit set.
 ;--------------------------------
 Function .onSelChange
     ${If} ${SectionIsSelected} ${SecLeiaConv}
@@ -1636,13 +1895,12 @@ FunctionEnd
 ;--------------------------------
 
 LangString DESC_SecRuntime ${LANG_ENGLISH} "Core OpenXR runtime, service, and native compositors. Required by every other component."
-LangString DESC_SecShell   ${LANG_ENGLISH} "Spatial workspace + window manager for 3D apps. Multi-app layouts, chrome, file picker."
 LangString DESC_SecMcp     ${LANG_ENGLISH} "Claude / AI control adapter for DisplayXR. Required for the displayxr-mcp Tools experience."
 LangString DESC_SecOpenConv ${LANG_ENGLISH} "Open-model 2D-to-3D conversion provider: depth from images and video on ONNX Runtime/DirectML, for displays without a vendor conversion module. Models download on first use."
 !ifdef LEIACONV_EXE
-LangString DESC_SecLeiaConv ${LANG_ENGLISH} "2D-to-3D conversion from the display maker. Needs the Leia conversion runtime, installed separately."
+LangString DESC_SecLeiaConv ${LANG_ENGLISH} "2D-to-3D conversion from the display maker, for Leia SR displays. Ticked with the Leia SR plug-in. Needs the Leia conversion runtime, installed separately."
 !endif
-LangString DESC_SecLeia    ${LANG_ENGLISH} "Display processor plug-in for Leia SR 3D monitors. Safe to install on any PC: it stays inactive until the monitor's own platform software is installed (before or after DisplayXR)."
+LangString DESC_SecLeia    ${LANG_ENGLISH} "Display processor plug-in for Leia SR 3D monitors. Ticked when this PC has a Leia SR display attached, or already has the plug-in. Tick it yourself to install it for a display you will connect later."
 LangString DESC_SecGauss   ${LANG_ENGLISH} "Sample 3D scene viewer (Gaussian splatting renderer). Standalone DisplayXR app."
 LangString DESC_SecModelViewer ${LANG_ENGLISH} "glTF 2.0 PBR model viewer (.glb/.gltf). Standalone DisplayXR app."
 LangString DESC_SecMediaPlayer ${LANG_ENGLISH} "Stereo 3D photo/video media player. Standalone DisplayXR app."
@@ -1651,7 +1909,6 @@ LangString DESC_SecEarthView ${LANG_ENGLISH} "Streaming 3D city viewer on Google
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
     !insertmacro MUI_DESCRIPTION_TEXT ${SecRuntime} $(DESC_SecRuntime)
-    !insertmacro MUI_DESCRIPTION_TEXT ${SecShell}   $(DESC_SecShell)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecMcp}     $(DESC_SecMcp)
     !insertmacro MUI_DESCRIPTION_TEXT ${SecLeia}    $(DESC_SecLeia)
 !ifdef LEIACONV_EXE
@@ -1680,8 +1937,19 @@ LangString DESC_SecEarthView ${LANG_ENGLISH} "Streaming 3D city viewer on Google
 ; cascades into plug-in uninstallers nor deletes their registration, so the
 ; bundle must not rely on it to remove a plug-in.
 ;
+; The DisplayXR Shell is NOT on this list any more: since 2026-11-28 the
+; bundle does not install it, so it does not own it and does not run its
+; uninstaller. Note what still happens to one, though: the runtime is
+; removed last below, and the runtime's own uninstaller cascade-uninstalls
+; every registered workspace controller
+; (HKLM\Software\DisplayXR\WorkspaceControllers\<id>, the Shell
+; included) before it touches its files, because a controller cannot run
+; without the runtime and the Shell lives in the runtime's directory. So
+; uninstalling the bundle still leaves no Shell behind; that is the
+; runtime's rule, not the bundle's.
+;
 ; Walk each child's UninstallString in reverse install order
-; (EarthView → Avatar → MediaPlayer → ModelViewer → Gauss → Open Conversion → MCP → Leia conversion → Leia SR → Shell → Runtime). Runtime last so its
+; (EarthView → Avatar → MediaPlayer → ModelViewer → Gauss → Open Conversion → MCP → Leia conversion → Leia SR → Runtime). Runtime last so its
 ; DeleteRegKey /ifempty Software\DisplayXR cleanup catches any orphan
 ; subkeys (per PR DisplayXR/displayxr-runtime#291 fix #4). The chain
 ; gracefully skips any child whose ARP key is absent — covers
@@ -1747,7 +2015,7 @@ Section "Uninstall"
     ; -- MCP Tools --
     ; ARP key names are the children's own ProductName slugs — no hyphens
     ; between "DisplayXR" and the component (the child installers write
-    ; "DisplayXRMCP", "DisplayXRLeiaSR", "DisplayXRShell"). A hyphenated
+    ; "DisplayXRMCP", "DisplayXRLeiaSR"). A hyphenated
     ; lookup silently misses every child.
     ClearErrors
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRMCP" "UninstallString"
@@ -1775,15 +2043,6 @@ Section "Uninstall"
     ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRLeiaSR" "UninstallString"
     ${If} $ChildUninstall != ""
         DetailPrint "Uninstalling Leia SR Plug-in..."
-        !insertmacro ExecChild '$ChildUninstall /S'
-        DetailPrint "  exit code: $0"
-    ${EndIf}
-
-    ; -- Shell --
-    ClearErrors
-    ReadRegStr $ChildUninstall HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRShell" "UninstallString"
-    ${If} $ChildUninstall != ""
-        DetailPrint "Uninstalling DisplayXR Shell..."
         !insertmacro ExecChild '$ChildUninstall /S'
         DetailPrint "  exit code: $0"
     ${EndIf}

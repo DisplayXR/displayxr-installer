@@ -63,7 +63,6 @@ export REPO_ROOT
 # shellcheck source=scripts/lib/fetch-components.sh
 source "$REPO_ROOT/scripts/lib/fetch-components.sh"
 
-SHELL_TAG="$(jq -r '.shell' "$REPO_ROOT/versions.json")"
 LEIA_TAG="$(jq -r '.leia_plugin' "$REPO_ROOT/versions.json")"
 MCP_TAG="$(jq -r '.mcp_tools' "$REPO_ROOT/versions.json")"
 OPENCONV_TAG="$(jq -r '.conversion_open' "$REPO_ROOT/versions.json")"
@@ -78,7 +77,6 @@ cat <<EOF
 ==> DisplayXR bundle build
     bundle:      v$VERSION
     runtime:     $RUNTIME_TAG
-    shell:       $SHELL_TAG
     leia_plugin: $LEIA_TAG
     mcp_tools:   $MCP_TAG
     conversion_open: $OPENCONV_TAG
@@ -153,8 +151,11 @@ process_component() {
         earthview_demo)
             extract_earthview_demo "$expanded"
             ;;
-        shell|leia_plugin|mcp_tools|conversion_open|leia_conversion)
-            # Future: shell/leia-plugin/mcp/open-conversion/leia-conversion don't ship macOS .pkg today. When
+        mcp_tools)
+            extract_mcp_tools "$expanded"
+            ;;
+        leia_plugin|conversion_open|leia_conversion)
+            # Future: leia-plugin/open-conversion/leia-conversion don't ship macOS .pkg today. When
             # they do, add extract_$name like extract_runtime — most
             # will look the same (one component .pkg inside, one
             # <choice>/<pkg-ref> pair).
@@ -309,8 +310,45 @@ extract_earthview_demo() {
 "
 }
 
+# extract_mcp_tools: same shape as the demos. DisplayXRMCP-<v>.pkg is a
+# productbuild distribution with one component, mcp.pkg (identifier
+# com.displayxr.mcp): /usr/local/bin/displayxr-mcp + a postinstall that writes
+# the capability flag /Library/Application Support/DisplayXR/Capabilities/MCP/
+# Enabled. pkgutil --flatten keeps the component's Scripts/, so the
+# postinstall runs from inside the bundle as it does standalone. In its own
+# installer the choice is fixed (it is the only one); here it is optional and
+# starts selected, like the Windows bundle's "MCP Tools" row.
+extract_mcp_tools() {
+    local expanded="$1"
+    local comp_dir="$expanded/mcp.pkg"
+    if [[ ! -d "$comp_dir" ]]; then
+        echo "ERROR: mcp.pkg not found inside expanded mcp_tools distribution" >&2
+        echo "       (expected $comp_dir; check that the MCP release artifact is a productbuild distribution)" >&2
+        exit 1
+    fi
+    if [[ ! -f "$comp_dir/Scripts/postinstall" ]]; then
+        echo "ERROR: mcp.pkg carries no postinstall - without it the MCP capability flag is never written" >&2
+        exit 1
+    fi
+    local flat="$COMPONENTS_DIR/mcp_tools.pkg"
+    pkgutil --flatten "$comp_dir" "$flat"
+
+    CHOICE_LINES+="        <line choice=\"mcp_tools\"/>"$'\n'
+    CHOICES+="    <choice id=\"mcp_tools\" visible=\"true\" start_selected=\"true\"
+        title=\"MCP Tools\"
+        description=\"Adapter that lets AI agents (MCP clients) control DisplayXR apps. Installs /usr/local/bin/displayxr-mcp and turns on the MCP capability for the runtime. Optional.\">
+        <pkg-ref id=\"com.displayxr.mcp\"/>
+    </choice>
+"
+    PKG_REFS+="    <pkg-ref id=\"com.displayxr.mcp\" version=\"${MCP_TAG#v}\" onConclusion=\"none\">mcp_tools.pkg</pkg-ref>
+"
+}
+
 process_component runtime     "$RUNTIME_TAG"
-process_component shell       "$SHELL_TAG"
+# No process_component call for the Shell: it is not a bundle component
+# on any platform (since 2026-11-28). It is a catalog add-on (displayxr-shell),
+# installed from the Dashboard or its own DisplayXRShell-*.pkg.
+# check_bundle_coverage.ps1 lists the `shell` pin as intentionally unbundled.
 process_component leia_plugin "$LEIA_TAG"
 process_component mcp_tools   "$MCP_TAG"
 # Open-model conversion provider (ADR-053 P4): Windows .exe + Linux tarball
