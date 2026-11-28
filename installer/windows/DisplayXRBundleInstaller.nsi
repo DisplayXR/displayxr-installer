@@ -223,7 +223,7 @@ Var G_MediaPlayerInstalled
 Var G_AvatarInstalled
 Var G_EarthViewInstalled
 
-; Leia rows' default (DetectDisplay / .onInit): the detection verdict line,
+; Leia SR rows' default (DetectDisplay / .onInit): the detection verdict line,
 ; and the one-line reason the rows started ticked or unticked, printed into
 ; the install log by -StopDisplayXRProcesses.
 Var G_LeiaDetect
@@ -906,7 +906,7 @@ Section "-StopDisplayXRProcesses"
     ${If} $R0 == 2
         Call RuntimeHolderPreflight
     ${EndIf}
-    ; Record why the Leia rows started the way they did (DetectDisplay ran in
+    ; Record why the Leia SR rows started the way they did (DetectDisplay ran in
     ; .onInit, before there was a details list to print to).
     DetailPrint "Leia SR plug-in default: $G_LeiaDefaultWhy"
     DetailPrint "Stopping DisplayXR processes for the install chain..."
@@ -1029,7 +1029,7 @@ SectionGroupEnd
 
 SectionGroup /e "Vendor plug-ins" SecGrpVendors
     ; /o = unticked unless .onInit ticks it: already installed, or a Leia SR
-    ; display detected (DetectDisplay), or /LEIA=1. See .onInit.
+    ; display detected (DetectDisplay), or /LEIASR=1. See .onInit.
     Section /o "Leia SR plug-in" SecLeia
         !insertmacro SkipIfRuntimeFailed "Leia SR plug-in"
         SetOutPath "$INSTDIR"
@@ -1480,7 +1480,7 @@ FunctionEnd
 ; (the runtime installer's catalog-page rule), and neither does anything
 ; that went wrong: no network (dxr-get reads the catalog online), no
 ; PowerShell, a timeout. All of those cost the automatic tick only; the user
-; can still tick the row, and /LEIA=1 forces it for unattended installs.
+; can still tick the row, and /LEIASR=1 forces it for unattended installs.
 ;
 ; Out: $G_LeiaDetect = the verdict line (first word decides)
 ;--------------------------------
@@ -1648,16 +1648,16 @@ Function .onInit
     ; also covers an install whose files were damaged, so the run repairs it.
     ;
     ; Overrides (interactive and /S alike):
-    ;   /LEIA=1  tick it whatever the detection says (IT deploying to a PC
+    ;   /LEIASR=1  tick it whatever the detection says (IT deploying to a PC
     ;            whose display is not attached yet, or an offline install)
-    ;   /LEIA=0  do not run detection; ticked only if installed (never a
+    ;   /LEIASR=0  do not run detection; ticked only if installed (never a
     ;            way to remove it -- untick it on the page for that)
     ;   none     detection decides (also in a silent /S run)
     !insertmacro DetectComponent "DisplayXRLeiaSR" $G_LeiaInstalled $G_LeiaVer "Leia SR plug-in" 1
     StrCpy $2 $0             ; keep the marker verdict across GetOptions
     ${GetParameters} $R0
     ClearErrors
-    ${GetOptions} $R0 "/LEIA=" $R1
+    ${GetOptions} $R0 "/LEIASR=" $R1
     ${If} ${Errors}
         StrCpy $R1 "auto"
     ${EndIf}
@@ -1665,10 +1665,10 @@ Function .onInit
         StrCpy $G_LeiaDefaultWhy "ticked (already installed)"
         !insertmacro SelectSection ${SecLeia}
     ${ElseIf} $R1 == "1"
-        StrCpy $G_LeiaDefaultWhy "ticked (/LEIA=1)"
+        StrCpy $G_LeiaDefaultWhy "ticked (/LEIASR=1)"
         !insertmacro SelectSection ${SecLeia}
     ${ElseIf} $R1 == "0"
-        StrCpy $G_LeiaDefaultWhy "unticked (/LEIA=0: detection not run)"
+        StrCpy $G_LeiaDefaultWhy "unticked (/LEIASR=0: detection not run)"
     ${Else}
         Call DetectDisplay
         ${WordFind} "$G_LeiaDetect" " " "+1" $R2    ; first word (the whole line if it is one word)
@@ -1692,7 +1692,7 @@ Function .onInit
     ; Leia conversion - ticked with the plug-in it belongs to: when it is
     ; installed itself ("installed => ticked", load-bearing for the same /o
     ; reason as the plug-in), or whenever the plug-in row above was ticked
-    ; (installed plug-in, a detected Leia SR display, /LEIA=1). The
+    ; (installed plug-in, a detected Leia SR display, /LEIASR=1). The
     ; installed-plug-in case is what carries a box from a plug-in that still
     ; held the conversion provider (< ${LEIACONV_MIN_LEIA_VER}) over to the
     ; component. Its installed version is the component's own marker,

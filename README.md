@@ -46,8 +46,8 @@ Silent installs (`/S`) follow the same rule. Overrides, for IT:
 
 | Switch | Effect |
 |---|---|
-| `/LEIA=1` | tick both rows whatever detection says (a display not connected yet, an offline install) |
-| `/LEIA=0` | skip detection; the rows are ticked only when already installed |
+| `/LEIASR=1` | tick both rows whatever detection says (a display not connected yet, an offline install) |
+| `/LEIASR=0` | skip detection; the rows are ticked only when already installed |
 | `/CATALOG=<url\|file>` | hand dxr-get another signed catalog (testing) |
 
 Why: the plug-in's own installer is going to fetch the display maker's platform software, so installing it on every PC would pull vendor software onto machines without the display.

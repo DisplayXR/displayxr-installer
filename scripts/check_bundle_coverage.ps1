@@ -55,7 +55,7 @@
       leia   - on Windows the Leia SR plug-in and Leia conversion rows start
                UNTICKED (Section /o) and are ticked only by the catalog's
                display detection (dxr-get, embedded from the runtime
-               installer), an existing install, or /LEIA=1. The wiring for
+               installer), an existing install, or /LEIASR=1. The wiring for
                that is checked below.
 
     Exit 0 when every component is chained on both platforms; exit 1 (listing
@@ -184,20 +184,20 @@ if ($sh -notmatch '(?m)^extract_mcp_tools\(\)' -or $sh -notmatch '(?m)^\s*mcp_to
     Write-Host "ERROR: build-bundle.sh has no extract_mcp_tools rule - the macOS bundle would download DisplayXRMCP-*.pkg and skip it." -ForegroundColor Red
 }
 
-# --- Leia rows: unticked unless the catalog's detection says this PC has the display
-$leiaWiring = @()
-if ($nsi -notmatch '(?m)^\s*Section\s+/o\s+"Leia SR plug-in"\s+SecLeia\b') { $leiaWiring += 'the "Leia SR plug-in" section is not declared /o (unticked by default)' }
-if ($nsi -match    '(?m)^\s*Section\s+"Leia conversion"\s+SecLeiaConv\b')   { $leiaWiring += 'the "Leia conversion" section is not declared /o (unticked by default)' }
-if ($nsi -notmatch 'Call DetectDisplay')                                     { $leiaWiring += 'the bundle .nsi never calls DetectDisplay' }
-if ($nsi -notmatch '(?m)^!ifndef DXR_GET_EXE')                               { $leiaWiring += 'the bundle .nsi does not require DXR_GET_EXE' }
-if ($nsi -notmatch [regex]::Escape('detect-display.ps1'))                   { $leiaWiring += 'the bundle .nsi does not embed detect-display.ps1' }
-if ($nsi -notmatch [regex]::Escape('"/LEIA="'))                             { $leiaWiring += 'the bundle .nsi lost the /LEIA= override' }
-if ($bat -notmatch [regex]::Escape('/DDXR_GET_EXE='))                       { $leiaWiring += 'build-bundle.bat never passes /DDXR_GET_EXE to makensis' }
-if (-not (Test-Path (Join-Path $repoRoot 'installer/windows/detect-display.ps1'))) { $leiaWiring += 'installer/windows/detect-display.ps1 is missing' }
-if ($leiaWiring.Count -gt 0) {
+# --- Leia SR rows: unticked unless the catalog's detection says this PC has the display
+$leiaSrWiring = @()
+if ($nsi -notmatch '(?m)^\s*Section\s+/o\s+"Leia SR plug-in"\s+SecLeia\b') { $leiaSrWiring += 'the "Leia SR plug-in" section is not declared /o (unticked by default)' }
+if ($nsi -match    '(?m)^\s*Section\s+"Leia conversion"\s+SecLeiaConv\b')   { $leiaSrWiring += 'the "Leia conversion" section is not declared /o (unticked by default)' }
+if ($nsi -notmatch 'Call DetectDisplay')                                     { $leiaSrWiring += 'the bundle .nsi never calls DetectDisplay' }
+if ($nsi -notmatch '(?m)^!ifndef DXR_GET_EXE')                               { $leiaSrWiring += 'the bundle .nsi does not require DXR_GET_EXE' }
+if ($nsi -notmatch [regex]::Escape('detect-display.ps1'))                   { $leiaSrWiring += 'the bundle .nsi does not embed detect-display.ps1' }
+if ($nsi -notmatch [regex]::Escape('"/LEIASR="'))                             { $leiaSrWiring += 'the bundle .nsi lost the /LEIASR= override' }
+if ($bat -notmatch [regex]::Escape('/DDXR_GET_EXE='))                       { $leiaSrWiring += 'build-bundle.bat never passes /DDXR_GET_EXE to makensis' }
+if (-not (Test-Path (Join-Path $repoRoot 'installer/windows/detect-display.ps1'))) { $leiaSrWiring += 'installer/windows/detect-display.ps1 is missing' }
+if ($leiaSrWiring.Count -gt 0) {
     $failed = $true
-    Write-Host "ERROR: the Leia rows are not wired to start unticked and follow display detection:" -ForegroundColor Red
-    foreach ($w in $leiaWiring) { Write-Host "  - $w" -ForegroundColor Red }
+    Write-Host "ERROR: the Leia SR rows are not wired to start unticked and follow display detection:" -ForegroundColor Red
+    foreach ($w in $leiaSrWiring) { Write-Host "  - $w" -ForegroundColor Red }
 }
 
 # User-facing bundle text names the component "Leia conversion" and its
