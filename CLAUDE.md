@@ -106,7 +106,8 @@ Schema: flat top-level keys matching the asset-table identifiers in
 `versions.json` key that is neither chained by both build scripts nor named in its
 `$IntentionallyUnbundled` table (with the reason). A key for a component that has no release
 yet is listed there **before** its first release: the runtime adds such a key to `versions.json`
-on that first release and mirrors it here in the same run (`leia_conversion`, `ultraleap`).
+on that first release and mirrors it here in the same run (`leia_conversion` did; `ultraleap`,
+`tracking_open` will).
 Where the bundle is going (a core bundle that downloads catalog components, plus an offline
 full bundle): `displayxr-runtime/docs/roadmap/catalog-driven-bundle.md`.
 
