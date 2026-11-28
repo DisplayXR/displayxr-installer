@@ -5,8 +5,13 @@
 # commercial Leia SR runtime (leiasr-runtime) or the Leia conversion runtime —
 # those ship and are managed separately by the display maker.
 #
-#   sudo ./uninstall.sh            # remove displayxr-leia-conversion + displayxr-leia-sr + displayxr-runtime
+#   sudo ./uninstall.sh            # remove every package this bundle installed
 #   sudo ./uninstall.sh --purge    # also purge config (active_runtime.json, etc.)
+#
+# "Every package this bundle installed" = the packages of the .debs bundled next
+# to this script (the demos too), plus the core names below in case the debs/
+# directory is gone. Before 2026-11-28 only the core list was removed, so every
+# bundled demo stayed installed after an uninstall.
 
 set -euo pipefail
 
@@ -22,9 +27,27 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 OP="remove"; [ "$PURGE" = 1 ] && OP="purge"
 
-# Remove the plug-ins first (each Depends: displayxr-runtime), then the runtime.
-# `|| true` per package so a not-installed component doesn't abort the rest.
-for pkg in displayxr-leia-conversion displayxr-leia-sr displayxr-runtime; do
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CORE_FIRST="displayxr-leia-conversion"
+CORE_LAST="displayxr-leia-sr displayxr-runtime"
+
+# Package names of the bundled .debs, minus the ones handled in fixed order.
+BUNDLED=""
+shopt -s nullglob
+for d in "$HERE"/debs/*.deb; do
+    p="$(dpkg-deb -f "$d" Package 2>/dev/null || true)"
+    case " $CORE_FIRST $CORE_LAST $BUNDLED " in
+        *" $p "*) ;;
+        *) [ -n "$p" ] && BUNDLED="$BUNDLED $p" ;;
+    esac
+done
+shopt -u nullglob
+
+# Apps and the conversion component first, then the Leia plug-in, then the
+# runtime they all Depend on. `|| true` per package so a not-installed
+# component doesn't abort the rest.
+# shellcheck disable=SC2086  # word splitting of the package lists is intended
+for pkg in $BUNDLED $CORE_FIRST $CORE_LAST; do
     if dpkg -s "$pkg" >/dev/null 2>&1; then
         echo "==> apt-get $OP $pkg"
         apt-get "$OP" -y "$pkg" || true
