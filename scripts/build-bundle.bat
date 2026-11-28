@@ -39,7 +39,7 @@ echo.
 echo Builds _out\DisplayXRBundle-X.Y.Z.exe from the per-component .exe
 echo installers pinned in versions.json.
 echo.
-echo Prerequisites: gh (authenticated), makensis (NSIS 3.x), PowerShell.
+echo Prerequisites: gh (authenticated), makensis (NSIS 3.x), PowerShell, 7-Zip (7z).
 exit /b 0
 
 :args_done
@@ -84,8 +84,11 @@ mkdir "%OUT_DIR%" 2>nul
 set "COMPONENT_REPO_runtime=DisplayXR/displayxr-runtime"
 set "COMPONENT_EXE_runtime=DisplayXRSetup-*.exe"
 
-set "COMPONENT_REPO_shell=DisplayXR/displayxr-shell-releases"
-set "COMPONENT_EXE_shell=DisplayXRShellSetup-*.exe"
+:: The DisplayXR Shell is NOT a bundle component (since 2026-11-28): it is a
+:: catalog add-on (catalog id displayxr-shell), installed from the Dashboard
+:: or its own installer. versions.json keeps its `shell` pin for the dev
+:: orchestrator and the catalog generator; check_bundle_coverage.ps1 lists it
+:: as intentionally unbundled, and refuses a COMPONENT_REPO_shell entry here.
 
 set "COMPONENT_REPO_leia_plugin=DisplayXR/displayxr-leia-plugin"
 set "COMPONENT_EXE_leia_plugin=DisplayXRLeiaSRSetup-*.exe"
@@ -126,7 +129,6 @@ set "COMPONENT_EXE_earthview_demo=DisplayXREarthViewSetup-*.exe"
 :: paths-with-spaces inside `for /f usebackq` breaks the pipe form.
 
 call :read_pin runtime     RUNTIME_TAG
-call :read_pin shell       SHELL_TAG
 call :read_pin leia_plugin LEIA_TAG
 call :read_pin mcp_tools   MCP_TAG
 call :read_pin conversion_open OPENCONV_TAG
@@ -138,7 +140,6 @@ call :read_pin avatar_demo AVATAR_TAG
 call :read_pin earthview_demo EARTHVIEW_TAG
 
 if "%RUNTIME_TAG%"=="" ( echo ERROR: versions.json missing 'runtime' pin & exit /b 1 )
-if "%SHELL_TAG%"==""   ( echo ERROR: versions.json missing 'shell' pin & exit /b 1 )
 if "%LEIA_TAG%"==""    ( echo ERROR: versions.json missing 'leia_plugin' pin & exit /b 1 )
 if "%MCP_TAG%"==""     ( echo ERROR: versions.json missing 'mcp_tools' pin & exit /b 1 )
 if "%OPENCONV_TAG%"=="" ( echo ERROR: versions.json missing 'conversion_open' pin & exit /b 1 )
@@ -171,7 +172,6 @@ if /i "%LEIACONV_CHAIN%"=="chain" if "%LEIACONV_TAG%"=="" ( echo ERROR: leia_plu
 :: feeds these to ${VersionCompare} so an in-place update only re-runs a
 :: sub-installer when the pinned version is strictly newer than installed.
 set "RUNTIME_VER=%RUNTIME_TAG%"
-set "SHELL_VER=%SHELL_TAG%"
 set "LEIA_VER=%LEIA_TAG%"
 set "MCP_VER=%MCP_TAG%"
 set "OPENCONV_VER=%OPENCONV_TAG%"
@@ -182,7 +182,6 @@ set "MEDIAPLAYER_VER=%MEDIAPLAYER_TAG%"
 set "AVATAR_VER=%AVATAR_TAG%"
 set "EARTHVIEW_VER=%EARTHVIEW_TAG%"
 if /i "%RUNTIME_VER:~0,1%"=="v" set "RUNTIME_VER=%RUNTIME_VER:~1%"
-if /i "%SHELL_VER:~0,1%"=="v"   set "SHELL_VER=%SHELL_VER:~1%"
 if /i "%LEIA_VER:~0,1%"=="v"    set "LEIA_VER=%LEIA_VER:~1%"
 if /i "%MCP_VER:~0,1%"=="v"     set "MCP_VER=%MCP_VER:~1%"
 if /i "%OPENCONV_VER:~0,1%"=="v" set "OPENCONV_VER=%OPENCONV_VER:~1%"
@@ -196,7 +195,6 @@ if /i "%EARTHVIEW_VER:~0,1%"=="v" set "EARTHVIEW_VER=%EARTHVIEW_VER:~1%"
 echo ==^> DisplayXR bundle build
 echo     bundle:      v%BUNDLE_VERSION%
 echo     runtime:     %RUNTIME_TAG%
-echo     shell:       %SHELL_TAG%
 echo     leia_plugin: %LEIA_TAG%
 echo     mcp_tools:   %MCP_TAG%
 echo     conversion_open: %OPENCONV_TAG%
@@ -210,7 +208,6 @@ echo     earthview:   %EARTHVIEW_TAG%
 
 :: --- Download each component's installer into _stage\<name>\ ---
 call :download_component runtime     %RUNTIME_TAG% || exit /b 1
-call :download_component shell       %SHELL_TAG%   || exit /b 1
 call :download_component leia_plugin %LEIA_TAG%    || exit /b 1
 call :download_component mcp_tools   %MCP_TAG%     || exit /b 1
 call :download_component conversion_open %OPENCONV_TAG% || exit /b 1
@@ -223,7 +220,6 @@ call :download_component earthview_demo %EARTHVIEW_TAG% || exit /b 1
 
 :: --- Capture the actual downloaded filenames (globs may match different builds) ---
 call :find_exe runtime     RUNTIME_EXE_FILE || exit /b 1
-call :find_exe shell       SHELL_EXE_FILE   || exit /b 1
 call :find_exe leia_plugin LEIA_EXE_FILE    || exit /b 1
 call :find_exe mcp_tools   MCP_EXE_FILE     || exit /b 1
 call :find_exe conversion_open OPENCONV_EXE_FILE || exit /b 1
@@ -239,7 +235,6 @@ call :find_exe earthview_demo EARTHVIEW_EXE_FILE || exit /b 1
 set "BUNDLE_STAGE=%STAGE%\bundle"
 mkdir "%BUNDLE_STAGE%" 2>nul
 copy /Y "%STAGE%\runtime\%RUNTIME_EXE_FILE%"        "%BUNDLE_STAGE%\" >nul || exit /b 1
-copy /Y "%STAGE%\shell\%SHELL_EXE_FILE%"            "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\leia_plugin\%LEIA_EXE_FILE%"       "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\mcp_tools\%MCP_EXE_FILE%"          "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\conversion_open\%OPENCONV_EXE_FILE%" "%BUNDLE_STAGE%\" >nul || exit /b 1
@@ -250,6 +245,41 @@ copy /Y "%STAGE%\mediaplayer_demo\%MEDIAPLAYER_EXE_FILE%" "%BUNDLE_STAGE%\" >nul
 copy /Y "%STAGE%\avatar_demo\%AVATAR_EXE_FILE%"     "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%STAGE%\earthview_demo\%EARTHVIEW_EXE_FILE%" "%BUNDLE_STAGE%\" >nul || exit /b 1
 copy /Y "%REPO_ROOT%\LICENSE"                       "%BUNDLE_STAGE%\" >nul || exit /b 1
+
+:: --- dxr-get.exe for the bundle's display detection ---
+:: The bundle ticks the Leia SR plug-in only where the signed catalog's detect
+:: rules find a Leia SR display (the .nsi's DetectDisplay). It runs the
+:: catalog engine dxr-get for that, and it must run before any runtime is on
+:: the PC, so it embeds one: the dxr-get.exe inside the runtime installer this
+:: bundle chains. Taking it from that installer (not a separate release asset,
+:: which only some runtime releases attach) keeps the engine and the runtime
+:: the same build. The runtime installer is NSIS, which 7-Zip unpacks.
+:: No dxr-get = no build: a bundle without it would never tick the plug-in on
+:: a Leia SR display.
+set "SEVENZIP="
+where 7z >nul 2>&1 && set "SEVENZIP=7z"
+if "%SEVENZIP%"=="" if exist "%ProgramFiles%\7-Zip\7z.exe" set "SEVENZIP=%ProgramFiles%\7-Zip\7z.exe"
+if "%SEVENZIP%"=="" (
+    echo ERROR: 7-Zip ^(7z^) not found - needed to take dxr-get.exe out of %RUNTIME_EXE_FILE%
+    exit /b 1
+)
+set "DXRGET_DIR=%STAGE%\dxr-get"
+mkdir "%DXRGET_DIR%" 2>nul
+"%SEVENZIP%" e -y -aoa "-o%DXRGET_DIR%" "%STAGE%\runtime\%RUNTIME_EXE_FILE%" dxr-get.exe >nul
+if errorlevel 1 (
+    echo ERROR: 7-Zip could not extract dxr-get.exe from %RUNTIME_EXE_FILE%
+    exit /b 1
+)
+set "DXR_GET_EXE=%DXRGET_DIR%\dxr-get.exe"
+if not exist "%DXR_GET_EXE%" (
+    echo ERROR: %RUNTIME_EXE_FILE% ^(%RUNTIME_TAG%^) carries no dxr-get.exe - the bundle cannot detect displays without it
+    exit /b 1
+)
+for %%A in ("%DXR_GET_EXE%") do if %%~zA LSS 65536 (
+    echo ERROR: the dxr-get.exe taken from %RUNTIME_EXE_FILE% is only %%~zA bytes - not a real build
+    exit /b 1
+)
+echo ==^> dxr-get.exe from %RUNTIME_EXE_FILE% ^(display detection^)
 
 :: --- Invoke makensis ---
 echo ==^> makensis -^> %OUT_DIR%\DisplayXRBundle-%BUNDLE_VERSION%.exe
@@ -266,7 +296,6 @@ if /i "%LEIACONV_CHAIN%"=="chain" set LEIACONV_DEFS="/DLEIACONV_EXE=%LEIACONV_EX
 makensis ^
     "/DBUNDLE_VERSION=%BUNDLE_VERSION%" ^
     "/DRUNTIME_EXE=%RUNTIME_EXE_FILE%" ^
-    "/DSHELL_EXE=%SHELL_EXE_FILE%" ^
     "/DLEIA_EXE=%LEIA_EXE_FILE%" ^
     "/DMCP_EXE=%MCP_EXE_FILE%" ^
     "/DOPENCONV_EXE=%OPENCONV_EXE_FILE%" ^
@@ -277,7 +306,6 @@ makensis ^
     "/DAVATAR_EXE=%AVATAR_EXE_FILE%" ^
     "/DEARTHVIEW_EXE=%EARTHVIEW_EXE_FILE%" ^
     "/DRUNTIME_VER=%RUNTIME_VER%" ^
-    "/DSHELL_VER=%SHELL_VER%" ^
     "/DLEIA_VER=%LEIA_VER%" ^
     "/DMCP_VER=%MCP_VER%" ^
     "/DOPENCONV_VER=%OPENCONV_VER%" ^
@@ -286,6 +314,7 @@ makensis ^
     "/DMEDIAPLAYER_VER=%MEDIAPLAYER_VER%" ^
     "/DAVATAR_VER=%AVATAR_VER%" ^
     "/DEARTHVIEW_VER=%EARTHVIEW_VER%" ^
+    "/DDXR_GET_EXE=%DXR_GET_EXE%" ^
     "/DBUNDLE_STAGE=%BUNDLE_STAGE%" ^
     "/DOUTPUT_DIR=%OUT_DIR%" ^
     "%REPO_ROOT%\installer\windows\DisplayXRBundleInstaller.nsi"
@@ -305,7 +334,7 @@ exit /b 0
 :: ============================================================
 
 :read_pin
-:: %1 = key name (e.g. runtime, shell)
+:: %1 = key name (e.g. runtime, mcp_tools)
 :: %2 = output variable name
 :: Per PR #291 fix #1: ConvertFrom-Json (Get-Content ...) — NOT a pipe.
 set "_RP_KEY=%~1"
@@ -316,7 +345,7 @@ exit /b 0
 
 
 :download_component
-:: %1 = component name (runtime, shell, leia_plugin, mcp_tools, conversion_open, ...)
+:: %1 = component name (runtime, leia_plugin, mcp_tools, conversion_open, ...)
 :: %2 = tag (e.g. v1.4.2)
 set "_DC_NAME=%~1"
 set "_DC_TAG=%~2"

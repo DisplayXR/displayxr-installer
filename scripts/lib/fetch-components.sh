@@ -45,8 +45,9 @@ curl -fsSL "$COMPONENTS_URL" -o "$CACHE_FILE"
 # shellcheck disable=SC1090
 source "$CACHE_FILE"
 
-# Sanity: the table must define at least the four core components.
-for name in runtime shell leia_plugin mcp_tools; do
+# Sanity: the table must define at least the core components the bundle
+# chains. (The Shell is not one of them any more: a catalog add-on.)
+for name in runtime leia_plugin mcp_tools; do
     if [[ -z "$(component_field "$name" REPO)" ]]; then
         echo "fetch-components.sh: components.sh@${RUNTIME_TAG} has no entry for '$name'" >&2
         return 1 2>/dev/null || exit 1

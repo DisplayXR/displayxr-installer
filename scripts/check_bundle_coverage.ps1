@@ -42,6 +42,22 @@
     must be equal. Otherwise the day the plug-in pin moves, the bundle would
     quietly ship without the component.
 
+    Two more decisions are held here, because nothing else would notice them
+    regress (David, 2026-11-28):
+
+      shell  - the DisplayXR Shell is NOT a bundle component on any platform;
+               it is a catalog add-on. Its pin stays in versions.json (dev
+               orchestrator, catalog generator), so it is listed as
+               intentionally unbundled AND the build scripts / .nsi must not
+               chain it - a section for it would also bring back the
+               "unticked + installed -> uninstall" branch that removes a Shell
+               the bundle no longer owns.
+      leia   - on Windows the Leia SR plug-in and Leia conversion rows start
+               UNTICKED (Section /o) and are ticked only by the catalog's
+               display detection (dxr-get, embedded from the runtime
+               installer), an existing install, or /LEIA=1. The wiring for
+               that is checked below.
+
     Exit 0 when every component is chained on both platforms; exit 1 (listing
     the orphans per platform) otherwise.
 #>
@@ -81,6 +97,7 @@ $nsi    = Get-Content -Raw $nsiPath
 $IntentionallyUnbundled = @{
     browser = 'Opt-in only (setup-displayxr --with browser): a full standalone browser is something a user asks for, not part of the display stack the default install lays down, so it must not ride the default install. Enrolling it in the default install / the desktop bundle is a separate decision (browser-pvt#120 D4). Its tags are vX.Y.Z from v1.0.0, validated by versions-bump like every other component.'
       cnsdk_services = 'Android only, and not installable by setup-displayxr at all: it pins the pair of CNSDK display-service APKs on the PRIVATE repo LeiaInc/CNSDK, fetched with LEIALOFT_GITHUB_TOKEN by build-android-bundle.yml to assemble the Android tablet bundle. The desktop bundle is Windows/macOS installers and has no Android lane to chain it into. This is the pin that made versions.json membership mean "desktop orchestrator installs it OR a platform bundle pins it".'
+    shell = 'A catalog add-on, not a bundle component, on every platform (David, 2026-11-28): the DisplayXR Shell is installed from the Dashboard (catalog id displayxr-shell) or its own installer. The pin stays for setup-displayxr, the offline paths and the catalog generator. The bundle leaves an installed Shell alone on upgrade (it has no section for it, so nothing can remove it); a bundle uninstall still takes it away because the runtime uninstaller cascades every registered workspace controller.'
     leia_conversion = "CONDITIONAL, and not chained by this bundle: the pinned Leia SR plug-in (leia_plugin) is older than v$LeiaConversionMinPlugin and still carries the conversion provider itself, so its installer would take the provider registration back from the component (Windows) and the two packages conflict (Linux). The component is wired into every build script behind scripts/leia_conversion_gate.ps1 and is chained - and required - from the first bundle whose leia_plugin pin is >= v$LeiaConversionMinPlugin. Until then: setup-displayxr --with leia-conversion. It needs the display maker's conversion runtime, which has its own installer and is never fetched by DisplayXR."
     ultraleap = 'NOT RELEASED YET (same as the entry above: listed ahead of the key). Ultraleap hands input provider, DisplayXR/displayxr-ultraleap, moved out of the runtime trunk. Opt-in (setup-displayxr --with ultraleap): it needs the Ultraleap tracking software and a camera, and a build installs only on the one runtime release it was built at (runtime ADR-063), so a bundle that pins a newer runtime could not install it anyway. Offered from the signed catalog, with its exact runtime range, never embedded by default.'
 }
@@ -129,12 +146,12 @@ if ($sh  -notmatch 'process_component\s+leia_conversion\b')               { $wir
 if ($sh  -notmatch [regex]::Escape('leia-conversion-gate.sh'))           { $wiring += 'build-bundle.sh does not source scripts/lib/leia-conversion-gate.sh' }
 if ($linux -notmatch [regex]::Escape('leia-conversion-gate.sh'))         { $wiring += 'build-bundle-linux.sh does not source scripts/lib/leia-conversion-gate.sh' }
 if ($linux -notmatch 'COMPONENTS\+=\(leia_conversion\)')                 { $wiring += 'build-bundle-linux.sh never adds leia_conversion to COMPONENTS' }
-if ($nsi -notmatch '(?m)^\s*Section\s+"Leia conversion"\s+SecLeiaConv')  { $wiring += 'the bundle .nsi has no "Leia conversion" section (SecLeiaConv)' }
+if ($nsi -notmatch '(?m)^\s*Section\s+(/o\s+)?"Leia conversion"\s+SecLeiaConv')  { $wiring += 'the bundle .nsi has no "Leia conversion" section (SecLeiaConv)' }
 if ($nsi -notmatch '(?m)^!ifdef LEIACONV_EXE')                           { $wiring += 'the bundle .nsi does not gate the section on LEIACONV_EXE' }
 
 # The section must come after the plug-in's: the handover depends on the order.
-$iLeia = $nsi.IndexOf('Section "Leia SR plug-in" SecLeia')
-$iConv = $nsi.IndexOf('Section "Leia conversion" SecLeiaConv')
+$iLeia = $nsi.IndexOf('"Leia SR plug-in" SecLeia')
+$iConv = $nsi.IndexOf('"Leia conversion" SecLeiaConv')
 if ($iLeia -ge 0 -and $iConv -ge 0 -and $iConv -lt $iLeia) { $wiring += 'the "Leia conversion" section is declared BEFORE "Leia SR plug-in" (it must run after it)' }
 
 # One gate version, three copies.
@@ -142,6 +159,36 @@ $shMin  = if ($gateSh -match '(?m)^LEIA_CONVERSION_MIN_PLUGIN="([^"]+)"') { $Mat
 $nsiMin = if ($nsi    -match '(?m)^!define LEIACONV_MIN_LEIA_VER "([^"]+)"') { $Matches[1] } else { '<missing>' }
 if ($shMin -ne $LeiaConversionMinPlugin -or $nsiMin -ne $LeiaConversionMinPlugin) {
     $wiring += "the gate version differs: leia_conversion_gate.ps1=$LeiaConversionMinPlugin, leia-conversion-gate.sh=$shMin, .nsi LEIACONV_MIN_LEIA_VER=$nsiMin"
+}
+
+# --- shell: unbundled on every platform, and kept that way --------------------
+$shellWiring = @()
+if ($bat   -match [regex]::Escape('COMPONENT_REPO_shell='))        { $shellWiring += 'build-bundle.bat has a COMPONENT_REPO_shell= entry' }
+if ($bat   -match [regex]::Escape('/DSHELL_EXE='))                 { $shellWiring += 'build-bundle.bat passes /DSHELL_EXE to makensis' }
+if ($sh    -match 'process_component\s+shell\b')                   { $shellWiring += 'build-bundle.sh calls process_component shell' }
+if ($linux -match '(?m)^COMPONENTS=.*\bshell\b|COMPONENTS\+=\(shell\)') { $shellWiring += 'build-bundle-linux.sh chains shell' }
+if ($nsi   -match '(?m)^\s*Section\s+(/o\s+)?"DisplayXR Shell"')    { $shellWiring += 'the bundle .nsi has a "DisplayXR Shell" section' }
+if ($nsi   -match 'SecShell\b')                                    { $shellWiring += 'the bundle .nsi still references SecShell' }
+if ($shellWiring.Count -gt 0) {
+    $failed = $true
+    Write-Host "ERROR: the DisplayXR Shell is a catalog add-on, not a bundle component, but the bundle chains it again:" -ForegroundColor Red
+    foreach ($w in $shellWiring) { Write-Host "  - $w" -ForegroundColor Red }
+}
+
+# --- Leia rows: unticked unless the catalog's detection says this PC has the display
+$leiaWiring = @()
+if ($nsi -notmatch '(?m)^\s*Section\s+/o\s+"Leia SR plug-in"\s+SecLeia\b') { $leiaWiring += 'the "Leia SR plug-in" section is not declared /o (unticked by default)' }
+if ($nsi -match    '(?m)^\s*Section\s+"Leia conversion"\s+SecLeiaConv\b')   { $leiaWiring += 'the "Leia conversion" section is not declared /o (unticked by default)' }
+if ($nsi -notmatch 'Call DetectDisplay')                                     { $leiaWiring += 'the bundle .nsi never calls DetectDisplay' }
+if ($nsi -notmatch '(?m)^!ifndef DXR_GET_EXE')                               { $leiaWiring += 'the bundle .nsi does not require DXR_GET_EXE' }
+if ($nsi -notmatch [regex]::Escape('detect-display.ps1'))                   { $leiaWiring += 'the bundle .nsi does not embed detect-display.ps1' }
+if ($nsi -notmatch [regex]::Escape('"/LEIA="'))                             { $leiaWiring += 'the bundle .nsi lost the /LEIA= override' }
+if ($bat -notmatch [regex]::Escape('/DDXR_GET_EXE='))                       { $leiaWiring += 'build-bundle.bat never passes /DDXR_GET_EXE to makensis' }
+if (-not (Test-Path (Join-Path $repoRoot 'installer/windows/detect-display.ps1'))) { $leiaWiring += 'installer/windows/detect-display.ps1 is missing' }
+if ($leiaWiring.Count -gt 0) {
+    $failed = $true
+    Write-Host "ERROR: the Leia rows are not wired to start unticked and follow display detection:" -ForegroundColor Red
+    foreach ($w in $leiaWiring) { Write-Host "  - $w" -ForegroundColor Red }
 }
 
 # User-facing bundle text names the component "Leia conversion" and its

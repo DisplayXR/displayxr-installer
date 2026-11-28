@@ -63,7 +63,6 @@ export REPO_ROOT
 # shellcheck source=scripts/lib/fetch-components.sh
 source "$REPO_ROOT/scripts/lib/fetch-components.sh"
 
-SHELL_TAG="$(jq -r '.shell' "$REPO_ROOT/versions.json")"
 LEIA_TAG="$(jq -r '.leia_plugin' "$REPO_ROOT/versions.json")"
 MCP_TAG="$(jq -r '.mcp_tools' "$REPO_ROOT/versions.json")"
 OPENCONV_TAG="$(jq -r '.conversion_open' "$REPO_ROOT/versions.json")"
@@ -78,7 +77,6 @@ cat <<EOF
 ==> DisplayXR bundle build
     bundle:      v$VERSION
     runtime:     $RUNTIME_TAG
-    shell:       $SHELL_TAG
     leia_plugin: $LEIA_TAG
     mcp_tools:   $MCP_TAG
     conversion_open: $OPENCONV_TAG
@@ -153,8 +151,8 @@ process_component() {
         earthview_demo)
             extract_earthview_demo "$expanded"
             ;;
-        shell|leia_plugin|mcp_tools|conversion_open|leia_conversion)
-            # Future: shell/leia-plugin/mcp/open-conversion/leia-conversion don't ship macOS .pkg today. When
+        leia_plugin|mcp_tools|conversion_open|leia_conversion)
+            # Future: leia-plugin/mcp/open-conversion/leia-conversion don't ship macOS .pkg today. When
             # they do, add extract_$name like extract_runtime — most
             # will look the same (one component .pkg inside, one
             # <choice>/<pkg-ref> pair).
@@ -310,7 +308,10 @@ extract_earthview_demo() {
 }
 
 process_component runtime     "$RUNTIME_TAG"
-process_component shell       "$SHELL_TAG"
+# No process_component call for the Shell: it is not a bundle component
+# on any platform (since 2026-11-28). It is a catalog add-on (displayxr-shell),
+# installed from the Dashboard or its own DisplayXRShell-*.pkg.
+# check_bundle_coverage.ps1 lists the `shell` pin as intentionally unbundled.
 process_component leia_plugin "$LEIA_TAG"
 process_component mcp_tools   "$MCP_TAG"
 # Open-model conversion provider (ADR-053 P4): Windows .exe + Linux tarball
