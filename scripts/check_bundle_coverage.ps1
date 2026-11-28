@@ -97,7 +97,7 @@ $nsi    = Get-Content -Raw $nsiPath
 $IntentionallyUnbundled = @{
     browser = 'Opt-in only (setup-displayxr --with browser): a full standalone browser is something a user asks for, not part of the display stack the default install lays down, so it must not ride the default install. Enrolling it in the default install / the desktop bundle is a separate decision (browser-pvt#120 D4). Its tags are vX.Y.Z from v1.0.0, validated by versions-bump like every other component.'
       cnsdk_services = 'Android only, and not installable by setup-displayxr at all: it pins the pair of CNSDK display-service APKs on the PRIVATE repo LeiaInc/CNSDK, fetched with LEIALOFT_GITHUB_TOKEN by build-android-bundle.yml to assemble the Android tablet bundle. The desktop bundle is Windows/macOS installers and has no Android lane to chain it into. This is the pin that made versions.json membership mean "desktop orchestrator installs it OR a platform bundle pins it".'
-    shell = 'A catalog add-on, not a bundle component, on every platform (David, 2026-11-28): the DisplayXR Shell is installed from the Dashboard (catalog id displayxr-shell) or its own installer. The pin stays for setup-displayxr, the offline paths and the catalog generator. The bundle leaves an installed Shell alone on upgrade (it has no section for it, so nothing can remove it); a bundle uninstall still takes it away because the runtime uninstaller cascades every registered workspace controller.'
+    shell = 'A catalog add-on, not a bundle component, on every platform (David, 2026-11-28): the DisplayXR Shell is installed from the Dashboard (catalog id displayxr-shell) or its own installer. The pin stays for setup-displayxr, the offline paths and the catalog generator. On upgrade the bundle never removes an installed Shell (it has no section for it) and updates it through dxr-get when it is behind the catalog (-UpdateAddons, Windows); a bundle uninstall still takes it away because the runtime uninstaller cascades every registered workspace controller.'
     leia_conversion = "CONDITIONAL, and not chained by this bundle: the pinned Leia SR plug-in (leia_plugin) is older than v$LeiaConversionMinPlugin and still carries the conversion provider itself, so its installer would take the provider registration back from the component (Windows) and the two packages conflict (Linux). The component is wired into every build script behind scripts/leia_conversion_gate.ps1 and is chained - and required - from the first bundle whose leia_plugin pin is >= v$LeiaConversionMinPlugin. Until then: setup-displayxr --with leia-conversion. It needs the display maker's conversion runtime, which has its own installer and is never fetched by DisplayXR."
     ultraleap = 'NOT RELEASED YET (same as the entry above: listed ahead of the key). Ultraleap hands input provider, DisplayXR/displayxr-ultraleap, moved out of the runtime trunk. Opt-in (setup-displayxr --with ultraleap): it needs the Ultraleap tracking software and a camera, and a build installs only on the one runtime release it was built at (runtime ADR-063), so a bundle that pins a newer runtime could not install it anyway. Offered from the signed catalog, with its exact runtime range, never embedded by default.'
 }
@@ -198,6 +198,32 @@ if ($leiaSrWiring.Count -gt 0) {
     $failed = $true
     Write-Host "ERROR: the Leia SR rows are not wired to start unticked and follow display detection:" -ForegroundColor Red
     foreach ($w in $leiaSrWiring) { Write-Host "  - $w" -ForegroundColor Red }
+}
+
+# --- Windows: installed add-ons the bundle does not carry are updated --------
+# (David, 2026-11-28). The section must run after every component section and
+# before the service restart, with the INSTALLED runtime's dxr-get, never the
+# runtime itself, and never as a bundle failure.
+$addonWiring = @()
+$uaPath = Join-Path $repoRoot 'installer/windows/update-addons.ps1'
+if (-not (Test-Path $uaPath)) { $addonWiring += 'installer/windows/update-addons.ps1 is missing' } else {
+    $ua = Get-Content -Raw $uaPath
+    foreach ($tok in @("'outdated', '--json', '--no-runtime'", "'--yes', '--no-runtime', '--no-start-service'", 'research')) {
+        if ($ua -notmatch [regex]::Escape($tok)) { $addonWiring += "update-addons.ps1 lost $tok" }
+    }
+}
+$iUa  = $nsi.IndexOf('Section "-UpdateAddons"')
+$iFin = $nsi.IndexOf('Section "-FinalizeBundleArp"')
+$iEv  = $nsi.IndexOf('"EarthView" SecEarthView')
+if ($iUa -lt 0) { $addonWiring += 'the bundle .nsi has no "-UpdateAddons" section' }
+elseif ($iUa -gt $iFin -or $iUa -lt $iEv) { $addonWiring += '"-UpdateAddons" must come after the last component section and before -FinalizeBundleArp' }
+if ($nsi -notmatch [regex]::Escape('"$1\dxr-get.exe"'))  { $addonWiring += '-UpdateAddons does not run the installed runtime''s dxr-get.exe' }
+if ($nsi -notmatch [regex]::Escape('"/NOADDONUPDATE"'))  { $addonWiring += 'the bundle .nsi lost the /NOADDONUPDATE switch' }
+if ($nsi -notmatch '(?m)^!define ADDON_SKIP_IDS "runtime,leia-sr,leia_plugin,open-conversion,') { $addonWiring += 'ADDON_SKIP_IDS no longer starts with the ids the bundle sections own' }
+if ($addonWiring.Count -gt 0) {
+    $failed = $true
+    Write-Host "ERROR: the add-on update pass is not wired as specified:" -ForegroundColor Red
+    foreach ($w in $addonWiring) { Write-Host "  - $w" -ForegroundColor Red }
 }
 
 # User-facing bundle text names the component "Leia conversion" and its

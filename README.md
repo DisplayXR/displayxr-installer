@@ -48,13 +48,24 @@ Silent installs (`/S`) follow the same rule. Overrides, for IT:
 |---|---|
 | `/LEIASR=1` | tick both rows whatever detection says (a display not connected yet, an offline install) |
 | `/LEIASR=0` | skip detection; the rows are ticked only when already installed |
-| `/CATALOG=<url\|file>` | hand dxr-get another signed catalog (testing) |
+| `/CATALOG=<url\|file>` | hand dxr-get another signed catalog (testing; also used by the add-on update below) |
+| `/NOADDONUPDATE` | do not update installed add-ons the bundle does not carry (below) |
 
 Why: the plug-in's own installer is going to fetch the display maker's platform software, so installing it on every PC would pull vendor software onto machines without the display.
 
 ### The DisplayXR Shell
 
-Not part of the bundle on any platform. Upgrading with the bundle leaves an installed Shell exactly as it is (the bundle has no row for it, so it can neither update nor remove it); update it from the Dashboard or its own installer. Uninstalling the bundle uninstalls the runtime, and the runtime's uninstaller removes every registered workspace controller with it, so the Shell goes too.
+Not part of the bundle on any platform: the bundle has no row for it and never removes it. On Windows an installed Shell is still **updated** by the bundle when it is behind the catalog (next section). Uninstalling the bundle uninstalls the runtime, and the runtime's uninstaller removes every registered workspace controller with it, so the Shell goes too.
+
+### Windows: installed add-ons are kept up to date
+
+The bundle stops carrying an add-on (the Shell), and users add others from the catalog (the DisplayXR Browser, third-party providers). So after its own components, and before it restarts the DisplayXR Service, the bundle asks the **installed** runtime's catalog engine which installed items are behind the catalog (`dxr-get outdated`) and updates them (`dxr-get install <id> --yes --no-runtime --no-start-service`, one call per item; it never downgrades). Items the bundle's own rows handle, the runtime itself and research items are left out.
+
+- It never fails the bundle. An add-on that cannot be updated keeps its version, and is named in the install log, on the finish page and in the ARP value `LastAddonUpdateFailure`. The exit code is unaffected.
+- Offline: skipped, with one log line.
+- Every wait is bounded: a `dxr-get` that prints nothing for 10 minutes is ended.
+- `/S` does the same. `/NOADDONUPDATE` skips it.
+- Windows only: macOS and Linux have no catalog engine yet.
 
 The exact version pins for each release live in [`versions.json`](versions.json) at the tagged commit.
 

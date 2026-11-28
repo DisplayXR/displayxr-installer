@@ -35,9 +35,11 @@
 ;
 ; Not chained: the DisplayXR Shell (workspace controller). Since 2026-11-28
 ; it is a separate catalog add-on (catalog id displayxr-shell), installed from
-; the Dashboard or its own installer. The bundle neither installs, upgrades nor
-; removes it; see "-StopDisplayXRProcesses" and the uninstaller for the two
-; places it is still mentioned.
+; the Dashboard or its own installer. The bundle neither embeds, installs nor
+; removes it (see "-StopDisplayXRProcesses" and the uninstaller). What it does
+; do, for the Shell and for any other catalog add-on the user installed (the
+; DisplayXR Browser, ...), is bring an INSTALLED one up to the catalog's
+; version through dxr-get: "-UpdateAddons".
 ;   BUNDLE_STAGE     absolute path to dir containing the staged .exe files + LICENSE
 ;   OUTPUT_DIR       absolute path for OutFile
 
@@ -195,6 +197,11 @@ ShowUninstDetails show
 !insertmacro MUI_PAGE_LICENSE "${BUNDLE_STAGE}\LICENSE"
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
+; The finish text is a variable so -UpdateAddons can add the add-ons it could
+; not update (set in .onInit, extended in -FinalizeBundleArp). Declared here:
+; the page's code is generated at this line and must see the Var.
+Var G_FinishText
+!define MUI_FINISHPAGE_TEXT "$G_FinishText"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -228,6 +235,16 @@ Var G_EarthViewInstalled
 ; the install log by -StopDisplayXRProcesses.
 Var G_LeiaDetect
 Var G_LeiaDefaultWhy
+
+; /CATALOG=<url|file> as the PowerShell helpers' ' -Catalog "<value>"' suffix
+; ("" without the switch), parsed once in .onInit.
+Var G_CatalogPs
+; -UpdateAddons: 1 = /NOADDONUPDATE; and "<name> (<reason>), ..." of the
+; installed add-ons it could not bring to the catalog's version. Never a
+; bundle failure: it goes to the log, the finish page and the ARP value
+; LastAddonUpdateFailure, NOT to G_ChildFailures / the exit code.
+Var G_NoAddonUpdate
+Var G_AddonNotUpdated
 
 ; Child-installer failures (install-order epic, runtime #1803 / installer #74).
 ; A failing child used to `Abort` its section, which also skipped
@@ -359,6 +376,9 @@ Function WriteInstallLog
     FileWrite $5 "Installer: $EXEPATH$\r$\n"
     ${If} $G_ChildFailures != ""
         FileWrite $5 "Components that did not install cleanly: $G_ChildFailures$\r$\n"
+    ${EndIf}
+    ${If} $G_AddonNotUpdated != ""
+        FileWrite $5 "Add-ons not updated (the bundle still succeeded): $G_AddonNotUpdated$\r$\n"
     ${EndIf}
     FileWrite $5 "$\r$\n"
 
@@ -994,8 +1014,9 @@ Section "DisplayXR Runtime (required)" SecRuntime
 SectionEnd
 
 ; "Tools" was "Workspace" until the DisplayXR Shell left the bundle
-; (2026-11-28). An installed Shell is never touched: there is no section for
-; it, so no "unticked + installed -> remove" branch can fire for it.
+; (2026-11-28). An installed Shell is never removed: there is no section for
+; it, so no "unticked + installed -> remove" branch can fire for it. It is
+; updated, if behind the catalog, by "-UpdateAddons".
 SectionGroup /e "Tools" SecGrpTools
     Section "MCP Tools" SecMcp
         !insertmacro SkipIfRuntimeFailed "DisplayXR MCP Tools"
@@ -1317,6 +1338,111 @@ SectionGroupEnd
 ; records the failures, and restarts the service.
 ;--------------------------------
 
+;--------------------------------
+; -UpdateAddons -- bring the installed catalog add-ons the bundle does NOT
+; carry up to the catalog's version, so they keep up with the runtime this
+; run installed (David, 2026-11-28). Today that is the DisplayXR Shell (it
+; left the bundle) and anything the user added from the catalog (the
+; DisplayXR Browser, a third-party provider). Items the sections above
+; handle are skipped (ADDON_SKIP_IDS), and so are the runtime and every
+; research item; update-addons.ps1 has the details.
+;
+; The INSTALLED runtime's dxr-get, never the embedded detection copy: the
+; runtime section above has just installed or upgraded the runtime, so that
+; copy is the current engine; on the version-skip path it is the engine of
+; the runtime that is current anyway. After a failed runtime install nothing
+; runs (SkipIfRuntimeFailed), like every other section.
+;
+; Never a bundle failure: an add-on that cannot be updated keeps its version,
+; is listed in the log and on the finish page, and is written to the ARP value
+; LastAddonUpdateFailure; the exit code is unaffected. Offline = one log line.
+; Bounded: the helper copies dxr-get's lines through as they come and ends a
+; dxr-get that is silent for ADDON_SILENCE_S; nsExec's /TIMEOUT (time without
+; output) is the backstop above that. /S behaves the same; /NOADDONUPDATE
+; skips the section. The service stays down (--no-start-service): the
+; finalize section below restarts it once.
+;
+; Windows only: macOS and Linux have no POSIX dxr-get yet (ADR-064 step 5).
+;--------------------------------
+!define ADDON_SILENCE_S 600
+!define /math ADDON_NSEXEC_TIMEOUT_MS ${ADDON_SILENCE_S} * 1000
+!define /redef /math ADDON_NSEXEC_TIMEOUT_MS ${ADDON_NSEXEC_TIMEOUT_MS} + 60000
+; Catalog ids AND aliases the bundle's own sections install, upgrade and
+; remove; dxr-get must not touch them behind those sections' backs. Ids from
+; the runtime's scripts/gen_catalog.py V2_ITEMS; the versions.json keys ride
+; along as aliases. MCP and the demos are not catalog items today; their
+; keys are listed so a future catalog entry stays the bundle's.
+!ifdef LEIACONV_EXE
+    !define ADDON_SKIP_LEIACONV ",leia-conversion,leia_conversion"
+!else
+    !define ADDON_SKIP_LEIACONV ""
+!endif
+!define ADDON_SKIP_IDS "runtime,leia-sr,leia_plugin,open-conversion,conversion_open${ADDON_SKIP_LEIACONV},mcp_tools,mcp,gauss_demo,modelviewer_demo,mediaplayer_demo,avatar_demo,earthview_demo"
+
+Section "-UpdateAddons"
+    !insertmacro SkipIfRuntimeFailed "add-on updates"
+    ${If} $G_NoAddonUpdate == 1
+        DetailPrint "Add-on updates: skipped (/NOADDONUPDATE)."
+        Return
+    ${EndIf}
+    ReadRegStr $1 HKLM "Software\DisplayXR\Runtime" "InstallPath"
+    ${If} $1 == ""
+    ${OrIfNot} ${FileExists} "$1\dxr-get.exe"
+        DetailPrint "Add-on updates: skipped (no dxr-get.exe in the runtime directory '$1')."
+        Return
+    ${EndIf}
+
+    DetailPrint "Updating installed add-ons the bundle does not carry (dxr-get)..."
+    File "/oname=$PLUGINSDIR\update-addons.ps1" "${__FILEDIR__}\update-addons.ps1"
+    Delete "$PLUGINSDIR\addon-results.txt"
+    nsExec::ExecToLog /TIMEOUT=${ADDON_NSEXEC_TIMEOUT_MS} '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\update-addons.ps1" -DxrGet "$1\dxr-get.exe" -Skip "${ADDON_SKIP_IDS}" -Results "$PLUGINSDIR\addon-results.txt" -SilenceSec ${ADDON_SILENCE_S}$G_CatalogPs'
+    Pop $0
+    ${If} $0 != 0
+        DetailPrint "WARNING: the add-on update helper did not finish ($0)."
+        StrCpy $G_AddonNotUpdated "the add-on update check (helper: $0), "
+    ${EndIf}
+
+    ; Results: one "kind|id|name|a|b" line each (update-addons.ps1).
+    ClearErrors
+    FileOpen $2 "$PLUGINSDIR\addon-results.txt" r
+    ${IfNot} ${Errors}
+      ua_read:
+        ClearErrors
+        FileRead $2 $3
+        ${If} ${Errors}
+            Goto ua_done
+        ${EndIf}
+        ${WordFind} "$3" "$\r" "+1" $3
+        ${WordFind} "$3" "$\n" "+1" $3
+        ${WordFind} "$3" "|" "+1" $4         ; kind
+        ${WordFind} "$3" "|" "+3" $5         ; name
+        ${WordFind} "$3" "|" "+4" $6         ; reason / from
+        ${If} $4 == "updated"
+            StrCpy $G_ChildRan 1
+            ${WordFind} "$3" "|" "+5" $7
+            DetailPrint "Add-on updated: $5 ($6 -> $7)"
+        ${ElseIf} $4 == "failed"
+            StrCpy $G_ChildRan 1
+            DetailPrint "WARNING: add-on not updated: $5 - $6"
+            StrCpy $G_AddonNotUpdated "$G_AddonNotUpdated$5 ($6), "
+        ${ElseIf} $4 == "skipped"
+            DetailPrint "Add-on not updated: $5 - $6"
+            StrCpy $G_AddonNotUpdated "$G_AddonNotUpdated$5 ($6), "
+        ${ElseIf} $4 == "offline"
+            DetailPrint "Add-on updates: skipped, $6."
+        ${ElseIf} $4 == "error"
+            DetailPrint "WARNING: add-on updates: $6"
+            StrCpy $7 "the add-on update check ($6), "
+            StrCpy $G_AddonNotUpdated "$G_AddonNotUpdated$7"
+        ${ElseIf} $4 == "none"
+            DetailPrint "Add-on updates: every installed add-on is current."
+        ${EndIf}
+        Goto ua_read
+      ua_done:
+        FileClose $2
+    ${EndIf}
+SectionEnd
+
 Section "-FinalizeBundleArp"
     ; After a failed runtime install the bundle did not install this
     ; version: leave the ARP entry / cache of whatever version was there
@@ -1373,6 +1499,19 @@ Section "-FinalizeBundleArp"
     ${Else}
         DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
             "LastChildFailure"
+    ${EndIf}
+
+    ; -UpdateAddons: what it could not update, kept apart from the child
+    ; failures above on purpose (it never fails the bundle or its exit code).
+    ${If} $G_AddonNotUpdated != ""
+        StrCpy $G_AddonNotUpdated $G_AddonNotUpdated -2  ; drop the trailing ", "
+        WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
+            "LastAddonUpdateFailure" "$G_AddonNotUpdated"
+        DetailPrint "Add-ons not updated (they keep their current version): $G_AddonNotUpdated"
+        StrCpy $G_FinishText "$G_FinishText$\r$\n$\r$\nNot updated (they keep their current version): $G_AddonNotUpdated.$\r$\nRun this installer again with an internet connection, or update them from the DisplayXR Dashboard."
+    ${Else}
+        DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DisplayXRBundle" \
+            "LastAddonUpdateFailure"
     ${EndIf}
 
     ; Flush the volume cache before declaring the install done (#86). NTFS
@@ -1492,19 +1631,7 @@ Function DetectDisplay
     File "/oname=$PLUGINSDIR\dxr-get.exe" "${DXR_GET_EXE}"
     File "/oname=$PLUGINSDIR\detect-display.ps1" "${__FILEDIR__}\detect-display.ps1"
 
-    ; /CATALOG=<url|file>: handed to dxr-get as --catalog (testing; the
-    ; catalog must still be signed). A value with a quote is ignored.
-    StrCpy $2 ""
-    ${GetParameters} $0
-    ClearErrors
-    ${GetOptions} $0 "/CATALOG=" $1
-    ${IfNot} ${Errors}
-    ${AndIf} $1 != ""
-        ${WordFind} $1 '"' "E#" $0
-        ${If} ${Errors}
-            StrCpy $2 ' -Catalog "$1"'
-        ${EndIf}
-    ${EndIf}
+    StrCpy $2 $G_CatalogPs   ; /CATALOG=, parsed in .onInit
 
     ${IfNot} ${Silent}
         Banner::show "Checking this PC for a 3D display..."
@@ -1555,6 +1682,29 @@ Function .onInit
     StrCpy $G_RuntimeVer       ""
     StrCpy $G_LeiaDetect       ""
     StrCpy $G_LeiaDefaultWhy   ""
+    StrCpy $G_AddonNotUpdated  ""
+    StrCpy $G_FinishText "DisplayXR ${BUNDLE_VERSION} has been installed on your computer.$\r$\n$\r$\nClick Finish to close this wizard."
+
+    ; /CATALOG=<url|file>: handed to dxr-get as --catalog by both PowerShell
+    ; helpers (testing; the catalog must still be signed). A value with a
+    ; double quote is ignored. /NOADDONUPDATE: skip "-UpdateAddons".
+    StrCpy $G_CatalogPs ""
+    StrCpy $G_NoAddonUpdate 0
+    ${GetParameters} $R0
+    ClearErrors
+    ${GetOptions} $R0 "/CATALOG=" $R1
+    ${IfNot} ${Errors}
+    ${AndIf} $R1 != ""
+        ${WordFind} $R1 '"' "E#" $R2
+        ${If} ${Errors}
+            StrCpy $G_CatalogPs ' -Catalog "$R1"'
+        ${EndIf}
+    ${EndIf}
+    ClearErrors
+    ${GetOptions} $R0 "/NOADDONUPDATE" $R1
+    ${IfNot} ${Errors}
+        StrCpy $G_NoAddonUpdate 1
+    ${EndIf}
     StrCpy $G_LeiaVer          ""
     StrCpy $G_McpVer           ""
     StrCpy $G_OpenConvVer      ""
@@ -1587,8 +1737,8 @@ Function .onInit
     !insertmacro DetectComponent "DisplayXR" $G_RuntimeInstalled $G_RuntimeVer "DisplayXR Runtime" 0
 
     ; The DisplayXR Shell is not probed: it is not a bundle component any
-    ; more (a catalog add-on since 2026-11-28), and an installed one is left
-    ; exactly as it is.
+    ; more (a catalog add-on since 2026-11-28). An installed one is never
+    ; removed; "-UpdateAddons" brings it to the catalog's version.
 
     ; MCP — default-checked. Pre-checked when already installed.
     !insertmacro DetectComponent "DisplayXRMCP" $G_McpInstalled $G_McpVer "DisplayXR MCP Tools" 1
